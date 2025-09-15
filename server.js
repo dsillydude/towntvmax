@@ -226,7 +226,7 @@ app.post('/api/admin/seed', async (req, res) => {
     if (existing) return res.json({ message: 'Admin already exists' });
     const hashed = await bcrypt.hash('admin123', 10);
     await new Admin({ username: 'admin', password: hashed }).save();
-    res.json({ message: 'Admin created', username: 'admin', password: 'admin123' });
+    res.json({ message: 'Admin created', username: 'admin', password: 'ourfam2019' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
