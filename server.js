@@ -235,10 +235,21 @@ app.post('/api/admin/login', async (req, res) => {
     const { username, password } = req.body;
     const admin = await Admin.findOne({ username });
     if (!admin) return res.status(401).json({ error: 'Invalid credentials' });
+
     const match = await bcrypt.compare(password, admin.password);
     if (!match) return res.status(401).json({ error: 'Invalid credentials' });
+
     const token = jwt.sign({ id: admin._id }, process.env.JWT_SECRET || 'secretkey', { expiresIn: '7d' });
-    res.json({ token });
+    
+    // CHANGE: Send back the token AND the admin's details (without the password)
+    res.json({ 
+      token, 
+      admin: {
+        id: admin._id,
+        username: admin.username,
+        // Add other fields like 'role' here in the future
+      } 
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
