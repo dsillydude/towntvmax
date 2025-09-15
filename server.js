@@ -243,13 +243,18 @@ app.post('/api/admin/login', async (req, res) => {
     
     // CHANGE: Send back the token AND the admin's details (without the password)
     res.json({ 
-      token, 
-      admin: {
-        id: admin._id,
-        username: admin.username,
-        // Add other fields like 'role' here in the future
-      } 
-    });
+  token, 
+  admin: {
+    id: admin._id,
+    username: admin.username,
+    email: admin.email || "",
+    role: "admin",
+    isActive: true,
+    createdAt: admin.createdAt || new Date(),
+    lastLogin: new Date()
+  }
+});
+
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
