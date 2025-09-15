@@ -275,9 +275,13 @@ app.put('/api/admin/subcategories/:id', verifyAdmin, async (req, res) => res.jso
 app.delete('/api/admin/subcategories/:id', verifyAdmin, async (req, res) => res.json(await SubCategory.findByIdAndDelete(req.params.id)));
 
 app.get('/api/admin/me', verifyAdmin, async (req, res) => {
-  const admin = await Admin.findById(req.adminId).select('-password');
-  if (!admin) return res.status(404).json({ error: 'Admin not found' });
-  res.json({ admin });
+  try {
+    const admin = await Admin.findById(req.adminId).select('-password');
+    if (!admin) return res.status(404).json({ error: 'Admin not found' });
+    res.json({ admin });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch admin profile' });
+  }
 });
 
 
