@@ -224,7 +224,7 @@ app.post('/api/admin/seed', async (req, res) => {
   try {
     const existing = await Admin.findOne({ username: 'admin' });
     if (existing) return res.json({ message: 'Admin already exists' });
-    const hashed = await bcrypt.hash('admin123', 10);
+    const hashed = await bcrypt.hash('ourfam2019', 10);
     await new Admin({ username: 'admin', password: hashed }).save();
     res.json({ message: 'Admin created', username: 'admin', password: 'ourfam2019' });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -273,6 +273,14 @@ app.get('/api/admin/subcategories', verifyAdmin, async (req, res) => res.json(aw
 app.post('/api/admin/subcategories', verifyAdmin, async (req, res) => res.json(await new SubCategory(req.body).save()));
 app.put('/api/admin/subcategories/:id', verifyAdmin, async (req, res) => res.json(await SubCategory.findByIdAndUpdate(req.params.id, req.body, { new: true })));
 app.delete('/api/admin/subcategories/:id', verifyAdmin, async (req, res) => res.json(await SubCategory.findByIdAndDelete(req.params.id)));
+
+app.get('/api/admin/me', verifyAdmin, async (req, res) => {
+  const admin = await Admin.findById(req.adminId).select('-password');
+  if (!admin) return res.status(404).json({ error: 'Admin not found' });
+  res.json({ admin });
+});
+
+
 
 // Start server
 const HOST = '0.0.0.0';
