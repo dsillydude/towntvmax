@@ -1,24 +1,25 @@
-// server.js - Townmax backend (Express + Mongoose)
-// Provides APIs: /api/banners, /api/channels, /api/content, /api/subcategories, /api/trending
+// server.js - Townmax backend (Express + Mongoose + Admin Auth)
+
 require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
 const bodyParser = require('body-parser');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// CORS configuration: allow origins from env or allow all for dev
+// CORS configuration
 let allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : null;
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
     if (!allowedOrigins) return callback(null, true);
     if (allowedOrigins.indexOf(origin) === -1) {
-      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-      return callback(new Error(msg), false);
+      return callback(new Error('CORS not allowed'), false);
     }
     return callback(null, true);
   }
@@ -26,23 +27,26 @@ app.use(cors({
 
 app.use(bodyParser.json({ limit: '5mb' }));
 app.use(bodyParser.urlencoded({ extended: true }));
-// serve uploads
 app.use('/uploads', express.static(path.join(__dirname, 'public', 'uploads')));
 
-// Connect to MongoDB
+// MongoDB connect
 const rawUri = process.env.MONGODB_URI || 'mongodb://localhost:27017';
 const dbName = process.env.DB_NAME || 'townmax';
-const MONGODB_URI = rawUri.includes('/')
-  ? rawUri.replace(/\/(\?|$)/, `/${dbName}$1`)
-  : `${rawUri}/${dbName}`;
+const MONGODB_URI = rawUri.includes('/') ? rawUri.replace(/\/(\?|$)/, `/${dbName}$1`) : `${rawUri}/${dbName}`;
 
 mongoose.set('strictQuery', false);
 mongoose.connect(MONGODB_URI)
   .then(() => console.log(`MongoDB connected: ${MONGODB_URI}`))
-  .catch(err => console.error('MongoDB connection error:', err.message));
+  .catch(err => console.error('MongoDB error:', err.message));
+
+const Schema = mongoose.Schema;
 
 // Schemas
-const Schema = mongoose.Schema;
+const AdminSchema = new Schema({
+  username: { type: String, unique: true, required: true },
+  password: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
 
 const SubCategorySchema = new Schema({
   parentCategory: { type: String, enum: ['sports', 'movies', 'series', 'trending'], required: true },
@@ -72,7 +76,7 @@ const ChannelSchema = new Schema({
   subCategory: { type: String, default: 'all' },
   playbackUrl: String,
   drmEnabled: { type: Boolean, default: false },
-  drmProvider: { type: String }, // widevine, playready, clearkey
+  drmProvider: { type: String },
   drmLicenseUrl: { type: String },
   drmHeaders: { type: Schema.Types.Mixed },
   cookieValue: { type: String },
@@ -108,106 +112,80 @@ const ContentSchema = new Schema({
 });
 
 // Models
+const Admin = mongoose.model('Admin', AdminSchema);
 const SubCategory = mongoose.model('SubCategory', SubCategorySchema);
 const Banner = mongoose.model('Banner', BannerSchema);
 const Channel = mongoose.model('Channel', ChannelSchema);
 const Content = mongoose.model('Content', ContentSchema);
 
-// Utility: normalize doc to plain object with selected fields
+// Normalizers
 function normalizeBanner(doc) {
   if (!doc) return null;
   return {
-    id: doc._id,
-    title: doc.title,
-    subtitle: doc.subtitle,
-    imageUrl: doc.imageUrl,
-    actionType: doc.actionType,
-    actionValue: doc.actionValue,
-    isVertical: !!doc.isVertical,
-    isActive: !!doc.isActive,
-    position: doc.position || 0
+    id: doc._id, title: doc.title, subtitle: doc.subtitle, imageUrl: doc.imageUrl,
+    actionType: doc.actionType, actionValue: doc.actionValue,
+    isVertical: !!doc.isVertical, isActive: !!doc.isActive, position: doc.position || 0
   };
 }
 
 function normalizeChannel(doc) {
   if (!doc) return null;
   return {
-    channelId: doc.channelId,
-    name: doc.name,
-    description: doc.description,
-    category: doc.category,
-    subCategory: doc.subCategory,
-    playbackUrl: doc.playbackUrl,
-    drmEnabled: !!doc.drmEnabled,
-    drmProvider: doc.drmProvider,
-    drmLicenseUrl: doc.drmLicenseUrl,
-    drmHeaders: doc.drmHeaders || {},
-    cookieValue: doc.cookieValue || null,
-    referrer: doc.referrer || null,
-    origin: doc.origin || null,
-    customUserAgent: doc.customUserAgent || null,
-    thumbnailUrl: doc.thumbnailUrl || null,
-    isPremium: !!doc.isPremium,
-    isActive: !!doc.isActive
+    channelId: doc.channelId, name: doc.name, description: doc.description,
+    category: doc.category, subCategory: doc.subCategory, playbackUrl: doc.playbackUrl,
+    drmEnabled: !!doc.drmEnabled, drmProvider: doc.drmProvider, drmLicenseUrl: doc.drmLicenseUrl,
+    drmHeaders: doc.drmHeaders || {}, cookieValue: doc.cookieValue || null,
+    referrer: doc.referrer || null, origin: doc.origin || null, customUserAgent: doc.customUserAgent || null,
+    thumbnailUrl: doc.thumbnailUrl || null, isPremium: !!doc.isPremium, isActive: !!doc.isActive
   };
 }
 
 function normalizeContent(doc) {
   if (!doc) return null;
   return {
-    contentId: doc.contentId,
-    title: doc.title,
-    description: doc.description,
-    type: doc.type,
-    category: doc.category,
-    subCategory: doc.subCategory,
-    streamUrl: doc.streamUrl,
-    drmEnabled: !!doc.drmEnabled,
-    drmProvider: doc.drmProvider,
-    drmLicenseUrl: doc.drmLicenseUrl,
-    drmHeaders: doc.drmHeaders || {},
-    cookieValue: doc.cookieValue || null,
-    referrer: doc.referrer || null,
-    origin: doc.origin || null,
-    customUserAgent: doc.customUserAgent || null,
-    posterUrl: doc.posterUrl || null,
-    isPremium: !!doc.isPremium,
-    isActive: !!doc.isActive
+    contentId: doc.contentId, title: doc.title, description: doc.description,
+    type: doc.type, category: doc.category, subCategory: doc.subCategory,
+    streamUrl: doc.streamUrl, drmEnabled: !!doc.drmEnabled, drmProvider: doc.drmProvider,
+    drmLicenseUrl: doc.drmLicenseUrl, drmHeaders: doc.drmHeaders || {},
+    cookieValue: doc.cookieValue || null, referrer: doc.referrer || null,
+    origin: doc.origin || null, customUserAgent: doc.customUserAgent || null,
+    posterUrl: doc.posterUrl || null, isPremium: !!doc.isPremium, isActive: !!doc.isActive
   };
+}
+
+// Middleware: verify admin token
+function verifyAdmin(req, res, next) {
+  const token = req.headers['authorization']?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'No token provided' });
+  jwt.verify(token, process.env.JWT_SECRET || 'secretkey', (err, decoded) => {
+    if (err) return res.status(401).json({ error: 'Unauthorized' });
+    req.adminId = decoded.id;
+    next();
+  });
 }
 
 // Routes
 
 // Health
-app.get('/', (req, res) => {
-  res.json({ ok: true, now: new Date() });
-});
+app.get('/', (req, res) => res.json({ ok: true, now: new Date() }));
 
-// Banners
+// Public routes
 app.get('/api/banners', async (req, res) => {
   try {
     const banners = await Banner.find({ isActive: true }).sort({ position: 1, createdAt: -1 }).limit(50);
     res.json({ banners: banners.map(normalizeBanner) });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to load banners' });
-  }
+  } catch (err) { res.status(500).json({ error: 'Failed to load banners' }); }
 });
 
-// Subcategories for a parent category
 app.get('/api/subcategories', async (req, res) => {
   try {
     const parent = (req.query.parent || '').toLowerCase();
     if (!parent) return res.status(400).json({ error: 'parent query required' });
     const subs = await SubCategory.find({ parentCategory: parent, isActive: true }).sort({ order: 1 });
     res.json({ subcategories: subs.map(s => ({ name: s.name, key: s.key, order: s.order })) });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to load subcategories' });
-  }
+  } catch (err) { res.status(500).json({ error: 'Failed to load subcategories' }); }
 });
 
-// Channels (filter by category, subCategory)
 app.get('/api/channels', async (req, res) => {
   try {
     const q = {};
@@ -215,16 +193,11 @@ app.get('/api/channels', async (req, res) => {
     if (req.query.subCategory) q.subCategory = req.query.subCategory;
     if (req.query.isPremium !== undefined) q.isPremium = req.query.isPremium === 'true';
     q.isActive = true;
-
     const list = await Channel.find(q).limit(200).sort({ createdAt: -1 });
     res.json({ channels: list.map(normalizeChannel) });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to load channels' });
-  }
+  } catch (err) { res.status(500).json({ error: 'Failed to load channels' }); }
 });
 
-// Content (filter by category, subCategory)
 app.get('/api/content', async (req, res) => {
   try {
     const q = {};
@@ -232,42 +205,66 @@ app.get('/api/content', async (req, res) => {
     if (req.query.subCategory) q.subCategory = req.query.subCategory;
     if (req.query.isPremium !== undefined) q.isPremium = req.query.isPremium === 'true';
     q.isActive = true;
-
     const list = await Content.find(q).limit(200).sort({ createdAt: -1 });
     res.json({ content: list.map(normalizeContent) });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to load content' });
-  }
+  } catch (err) { res.status(500).json({ error: 'Failed to load content' }); }
 });
 
-// Trending: random channels and contents (separate arrays)
 app.get('/api/trending', async (req, res) => {
   try {
     const sampleSize = parseInt(req.query.size || '8', 10);
-    const channels = await Channel.aggregate([
-      { $match: { category: 'trending', isActive: true } },
-      { $sample: { size: sampleSize } }
-    ]);
-    const contents = await Content.aggregate([
-      { $match: { category: 'trending', isActive: true } },
-      { $sample: { size: sampleSize } }
-    ]);
-    res.json({
-      channels: channels.map(normalizeChannel),
-      content: contents.map(normalizeContent)
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to load trending' });
-  }
+    const channels = await Channel.aggregate([{ $match: { category: 'trending', isActive: true } }, { $sample: { size: sampleSize } }]);
+    const contents = await Content.aggregate([{ $match: { category: 'trending', isActive: true } }, { $sample: { size: sampleSize } }]);
+    res.json({ channels: channels.map(normalizeChannel), content: contents.map(normalizeContent) });
+  } catch (err) { res.status(500).json({ error: 'Failed to load trending' }); }
 });
 
-// Start server
+// Admin routes
+app.post('/api/admin/seed', async (req, res) => {
+  try {
+    const existing = await Admin.findOne({ username: 'admin' });
+    if (existing) return res.json({ message: 'Admin already exists' });
+    const hashed = await bcrypt.hash('admin123', 10);
+    await new Admin({ username: 'admin', password: hashed }).save();
+    res.json({ message: 'Admin created', username: 'admin', password: 'admin123' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/admin/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const admin = await Admin.findOne({ username });
+    if (!admin) return res.status(401).json({ error: 'Invalid credentials' });
+    const match = await bcrypt.compare(password, admin.password);
+    if (!match) return res.status(401).json({ error: 'Invalid credentials' });
+    const token = jwt.sign({ id: admin._id }, process.env.JWT_SECRET || 'secretkey', { expiresIn: '7d' });
+    res.json({ token });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Protected CRUD
+app.get('/api/admin/banners', verifyAdmin, async (req, res) => res.json({ banners: (await Banner.find()).map(normalizeBanner) }));
+app.post('/api/admin/banners', verifyAdmin, async (req, res) => res.json(await new Banner(req.body).save()));
+app.put('/api/admin/banners/:id', verifyAdmin, async (req, res) => res.json(await Banner.findByIdAndUpdate(req.params.id, req.body, { new: true })));
+app.delete('/api/admin/banners/:id', verifyAdmin, async (req, res) => res.json(await Banner.findByIdAndDelete(req.params.id)));
+
+app.get('/api/admin/channels', verifyAdmin, async (req, res) => res.json({ channels: (await Channel.find()).map(normalizeChannel) }));
+app.post('/api/admin/channels', verifyAdmin, async (req, res) => res.json(await new Channel(req.body).save()));
+app.put('/api/admin/channels/:id', verifyAdmin, async (req, res) => res.json(await Channel.findByIdAndUpdate(req.params.id, req.body, { new: true })));
+app.delete('/api/admin/channels/:id', verifyAdmin, async (req, res) => res.json(await Channel.findByIdAndDelete(req.params.id)));
+
+app.get('/api/admin/content', verifyAdmin, async (req, res) => res.json({ content: (await Content.find()).map(normalizeContent) }));
+app.post('/api/admin/content', verifyAdmin, async (req, res) => res.json(await new Content(req.body).save()));
+app.put('/api/admin/content/:id', verifyAdmin, async (req, res) => res.json(await Content.findByIdAndUpdate(req.params.id, req.body, { new: true })));
+app.delete('/api/admin/content/:id', verifyAdmin, async (req, res) => res.json(await Content.findByIdAndDelete(req.params.id)));
+
+app.get('/api/admin/subcategories', verifyAdmin, async (req, res) => res.json(await SubCategory.find()));
+app.post('/api/admin/subcategories', verifyAdmin, async (req, res) => res.json(await new SubCategory(req.body).save()));
+app.put('/api/admin/subcategories/:id', verifyAdmin, async (req, res) => res.json(await SubCategory.findByIdAndUpdate(req.params.id, req.body, { new: true })));
+app.delete('/api/admin/subcategories/:id', verifyAdmin, async (req, res) => res.json(await SubCategory.findByIdAndDelete(req.params.id)));
+
 // Start server
 const HOST = '0.0.0.0';
-
 app.listen(PORT, HOST, () => {
-  console.log(`✅ Server is running and accessible on your network`);
-  console.log(`   Connect at: http://192.168.1.181:${PORT}`);
+  console.log(`✅ Server running at http://localhost:${PORT}`);
 });
