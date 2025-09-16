@@ -124,6 +124,23 @@ const ContentSchema = new Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+// ✅ User Schema (installationId-based)
+const UserSchema = new Schema({
+  installationId: { type: String, required: true, unique: true },
+  deviceInfo: { type: String, default: "" },   // optional: OS, model, app version
+  isActive: { type: Boolean, default: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
+// ✅ Subscription Schema (linked to installationId)
+const SubscriptionSchema = new Schema({
+  subscriptionId: { type: String, required: true, unique: true },
+  installationId: { type: String, required: true },
+  plan: { type: String, enum: ['free', 'premium', 'vip'], default: 'free' },
+  startDate: { type: Date, default: Date.now },
+  endDate: { type: Date },
+  isActive: { type: Boolean, default: true }
+});
 
 // Models
 const Admin = mongoose.model('Admin', AdminSchema);
@@ -131,6 +148,8 @@ const SubCategory = mongoose.model('SubCategory', SubCategorySchema);
 const Banner = mongoose.model('Banner', BannerSchema);
 const Channel = mongoose.model('Channel', ChannelSchema);
 const Content = mongoose.model('Content', ContentSchema);
+const User = mongoose.model('User', UserSchema);
+const Subscription = mongoose.model('Subscription', SubscriptionSchema);
 
 // Normalizers
 function normalizeBanner(doc) {
@@ -197,6 +216,33 @@ function normalizeContent(doc) {
   };
 }
 
+// ✅ User normalizer
+function normalizeUser(doc) {
+  if (!doc) return null;
+  return {
+    id: doc._id,
+    installationId: doc.installationId,
+    deviceInfo: doc.deviceInfo,
+    isActive: doc.isActive,
+    createdAt: doc.createdAt
+  };
+}
+
+// ✅ Subscription normalizer
+function normalizeSubscription(doc) {
+  if (!doc) return null;
+  return {
+    id: doc._id,
+    subscriptionId: doc.subscriptionId,
+    installationId: doc.installationId,
+    plan: doc.plan,
+    startDate: doc.startDate,
+    endDate: doc.endDate,
+    isActive: doc.isActive
+  };
+}
+
+
 // Middleware: verify admin token
 function verifyAdmin(req, res, next) {
   const token = req.headers['authorization']?.split(' ')[1];
@@ -219,6 +265,22 @@ app.get('/api/banners', async (req, res) => {
     const banners = await Banner.find({ isActive: true }).sort({ position: 1, createdAt: -1 }).limit(50);
     res.json({ banners: banners.map(normalizeBanner) });
   } catch (err) { res.status(500).json({ error: 'Failed to load banners' }); }
+});
+
+// ✅ Register installationId (called once by app on first run)
+app.post('/api/register-installation', async (req, res) => {
+  try {
+    const { installationId, deviceInfo } = req.body;
+    if (!installationId) return res.status(400).json({ error: 'installationId required' });
+
+    let user = await User.findOne({ installationId });
+    if (!user) {
+      user = await new User({ installationId, deviceInfo }).save();
+    }
+    res.json({ user: normalizeUser(user) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to register installation' });
+  }
 });
 
 app.get('/api/subcategories', async (req, res) => {
@@ -330,6 +392,40 @@ app.get('/api/admin/me', verifyAdmin, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch admin profile' });
   }
 });
+
+// ✅ Admin: Users
+app.get('/api/admin/users', verifyAdmin, async (req, res) =>
+  res.json({ users: (await User.find()).map(normalizeUser) })
+);
+
+app.post('/api/admin/users', verifyAdmin, async (req, res) =>
+  res.json(await new User(req.body).save())
+);
+
+app.put('/api/admin/users/:id', verifyAdmin, async (req, res) =>
+  res.json(await User.findByIdAndUpdate(req.params.id, req.body, { new: true }))
+);
+
+app.delete('/api/admin/users/:id', verifyAdmin, async (req, res) =>
+  res.json(await User.findByIdAndDelete(req.params.id))
+);
+
+// ✅ Admin: Subscriptions
+app.get('/api/admin/subscriptions', verifyAdmin, async (req, res) =>
+  res.json({ subscriptions: (await Subscription.find()).map(normalizeSubscription) })
+);
+
+app.post('/api/admin/subscriptions', verifyAdmin, async (req, res) =>
+  res.json(await new Subscription(req.body).save())
+);
+
+app.put('/api/admin/subscriptions/:id', verifyAdmin, async (req, res) =>
+  res.json(await Subscription.findByIdAndUpdate(req.params.id, req.body, { new: true }))
+);
+
+app.delete('/api/admin/subscriptions/:id', verifyAdmin, async (req, res) =>
+  res.json(await Subscription.findByIdAndDelete(req.params.id))
+);
 
 // Start server
 const HOST = '0.0.0.0';
