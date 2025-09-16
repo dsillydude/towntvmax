@@ -60,7 +60,8 @@ const BannerSchema = new Schema({
   title: String,
   subtitle: String,
   imageUrl: String,
-  actionType: { type: String, enum: ['content', 'channel', 'external'], default: 'external' },
+  // THIS is the line that was changed
+  actionType: { type: String, enum: ['content', 'channel', 'external', 'screen'], default: 'external' },
   actionValue: String,
   isVertical: { type: Boolean, default: false },
   isActive: { type: Boolean, default: true },
@@ -68,48 +69,61 @@ const BannerSchema = new Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+// ## PATCHED ChannelSchema ##
 const ChannelSchema = new Schema({
   channelId: { type: String, required: true, unique: true },
-  name: String,
-  description: String,
+  name: { type: String, required: true },
+  description: { type: String, default: "" },
   category: { type: String, enum: ['sports', 'movies', 'series', 'trending'], required: true },
   subCategory: { type: String, default: 'all' },
-  playbackUrl: String,
+  playbackUrl: { type: String, required: true },
+
+  // DRM
   drmEnabled: { type: Boolean, default: false },
-  drmProvider: { type: String },
-  drmLicenseUrl: { type: String },
-  drmHeaders: { type: Schema.Types.Mixed },
-  cookieValue: { type: String },
-  referrer: { type: String },
-  origin: { type: String },
-  customUserAgent: { type: String },
-  thumbnailUrl: String,
+  drmProvider: { type: String, enum: ['widevine', 'playready', 'clearkey', null], default: null },
+  drmLicenseUrl: { type: String, default: null },
+  drmHeaders: { type: Schema.Types.Mixed, default: {} },
+
+  // Extra headers
+  cookieValue: { type: String, default: null },
+  referrer: { type: String, default: null },
+  origin: { type: String, default: null },
+  customUserAgent: { type: String, default: null },
+
+  thumbnailUrl: { type: String, default: "" },
   isPremium: { type: Boolean, default: false },
   isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now }
 });
 
+// ## PATCHED ContentSchema ##
 const ContentSchema = new Schema({
   contentId: { type: String, required: true, unique: true },
-  title: String,
-  description: String,
+  title: { type: String, required: true },
+  description: { type: String, default: "" },
   type: { type: String, enum: ['movie', 'episode', 'clip', 'other'], default: 'movie' },
   category: { type: String, enum: ['sports', 'movies', 'series', 'trending'], required: true },
   subCategory: { type: String, default: 'all' },
-  streamUrl: String,
+  streamUrl: { type: String, required: true },
+
+  // DRM
   drmEnabled: { type: Boolean, default: false },
-  drmProvider: { type: String },
-  drmLicenseUrl: { type: String },
-  drmHeaders: { type: Schema.Types.Mixed },
-  cookieValue: { type: String },
-  referrer: { type: String },
-  origin: { type: String },
-  customUserAgent: { type: String },
-  posterUrl: String,
+  drmProvider: { type: String, enum: ['widevine', 'playready', 'clearkey', null], default: null },
+  drmLicenseUrl: { type: String, default: null },
+  drmHeaders: { type: Schema.Types.Mixed, default: {} },
+
+  // Extra headers
+  cookieValue: { type: String, default: null },
+  referrer: { type: String, default: null },
+  origin: { type: String, default: null },
+  customUserAgent: { type: String, default: null },
+
+  posterUrl: { type: String, default: "" },
   isPremium: { type: Boolean, default: false },
   isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now }
 });
+
 
 // Models
 const Admin = mongoose.model('Admin', AdminSchema);
@@ -128,28 +142,58 @@ function normalizeBanner(doc) {
   };
 }
 
+// ## PATCHED normalizeChannel ##
 function normalizeChannel(doc) {
   if (!doc) return null;
   return {
-    channelId: doc.channelId, name: doc.name, description: doc.description,
-    category: doc.category, subCategory: doc.subCategory, playbackUrl: doc.playbackUrl,
-    drmEnabled: !!doc.drmEnabled, drmProvider: doc.drmProvider, drmLicenseUrl: doc.drmLicenseUrl,
-    drmHeaders: doc.drmHeaders || {}, cookieValue: doc.cookieValue || null,
-    referrer: doc.referrer || null, origin: doc.origin || null, customUserAgent: doc.customUserAgent || null,
-    thumbnailUrl: doc.thumbnailUrl || null, isPremium: !!doc.isPremium, isActive: !!doc.isActive
+    channelId: doc.channelId,
+    name: doc.name,
+    description: doc.description,
+    category: doc.category,
+    subCategory: doc.subCategory,
+    playbackUrl: doc.playbackUrl,
+
+    drmEnabled: !!doc.drmEnabled,
+    drmProvider: doc.drmProvider,
+    drmLicenseUrl: doc.drmLicenseUrl,
+    drmHeaders: doc.drmHeaders || {},
+
+    cookieValue: doc.cookieValue || null,
+    referrer: doc.referrer || null,
+    origin: doc.origin || null,
+    customUserAgent: doc.customUserAgent || null,
+
+    thumbnailUrl: doc.thumbnailUrl || null,
+    isPremium: !!doc.isPremium,
+    isActive: !!doc.isActive
   };
 }
 
+// ## PATCHED normalizeContent ##
 function normalizeContent(doc) {
   if (!doc) return null;
   return {
-    contentId: doc.contentId, title: doc.title, description: doc.description,
-    type: doc.type, category: doc.category, subCategory: doc.subCategory,
-    streamUrl: doc.streamUrl, drmEnabled: !!doc.drmEnabled, drmProvider: doc.drmProvider,
-    drmLicenseUrl: doc.drmLicenseUrl, drmHeaders: doc.drmHeaders || {},
-    cookieValue: doc.cookieValue || null, referrer: doc.referrer || null,
-    origin: doc.origin || null, customUserAgent: doc.customUserAgent || null,
-    posterUrl: doc.posterUrl || null, isPremium: !!doc.isPremium, isActive: !!doc.isActive
+    contentId: doc.contentId,
+    title: doc.title,
+    description: doc.description,
+    type: doc.type,
+    category: doc.category,
+    subCategory: doc.subCategory,
+    streamUrl: doc.streamUrl,
+
+    drmEnabled: !!doc.drmEnabled,
+    drmProvider: doc.drmProvider,
+    drmLicenseUrl: doc.drmLicenseUrl,
+    drmHeaders: doc.drmHeaders || {},
+
+    cookieValue: doc.cookieValue || null,
+    referrer: doc.referrer || null,
+    origin: doc.origin || null,
+    customUserAgent: doc.customUserAgent || null,
+
+    posterUrl: doc.posterUrl || null,
+    isPremium: !!doc.isPremium,
+    isActive: !!doc.isActive
   };
 }
 
@@ -241,20 +285,18 @@ app.post('/api/admin/login', async (req, res) => {
 
     const token = jwt.sign({ id: admin._id }, process.env.JWT_SECRET || 'secretkey', { expiresIn: '7d' });
     
-    // CHANGE: Send back the token AND the admin's details (without the password)
     res.json({ 
-  token, 
-  admin: {
-    id: admin._id,
-    username: admin.username,
-    email: admin.email || "",
-    role: "admin",
-    isActive: true,
-    createdAt: admin.createdAt || new Date(),
-    lastLogin: new Date()
-  }
-});
-
+      token, 
+      admin: {
+        id: admin._id,
+        username: admin.username,
+        email: admin.email || "",
+        role: "admin",
+        isActive: true,
+        createdAt: admin.createdAt || new Date(),
+        lastLogin: new Date()
+      }
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -288,8 +330,6 @@ app.get('/api/admin/me', verifyAdmin, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch admin profile' });
   }
 });
-
-
 
 // Start server
 const HOST = '0.0.0.0';
