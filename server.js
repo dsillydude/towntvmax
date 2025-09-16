@@ -407,6 +407,43 @@ app.post('/api/admin/login', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/admin/stats', verifyAdmin, async (req, res) => {
+  try {
+    const [
+      totalUsers,
+      premiumUsers,
+      activeSubscriptions,
+      totalPackages,
+      totalBanners,
+      totalChannels,
+      totalContent,
+      totalSubcategories,
+    ] = await Promise.all([
+      User.countDocuments(),
+      User.countDocuments({ isPremium: true }),
+      Subscription.countDocuments({ isActive: true, endDate: { $gte: new Date() } }),
+      Package.countDocuments(),
+      Banner.countDocuments(),
+      Channel.countDocuments(),
+      Content.countDocuments(),
+      SubCategory.countDocuments(),
+    ]);
+
+    res.json({
+      totalUsers,
+      premiumUsers,
+      activeSubscriptions,
+      totalPackages,
+      totalBanners,
+      totalChannels,
+      totalContent,
+      totalSubcategories,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load dashboard stats' });
+  }
+});
+
 // Protected CRUD
 app.get('/api/admin/banners', verifyAdmin, async (req, res) => res.json({ banners: (await Banner.find()).map(normalizeBanner) }));
 app.post('/api/admin/banners', verifyAdmin, async (req, res) => res.json(await new Banner(req.body).save()));
