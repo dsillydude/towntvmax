@@ -423,7 +423,10 @@ app.post('/api/admin/content', verifyAdmin, async (req, res) => res.json(await n
 app.put('/api/admin/content/:id', verifyAdmin, async (req, res) => res.json(await Content.findByIdAndUpdate(req.params.id, req.body, { new: true })));
 app.delete('/api/admin/content/:id', verifyAdmin, async (req, res) => res.json(await Content.findByIdAndDelete(req.params.id)));
 
-app.get('/api/admin/subcategories', verifyAdmin, async (req, res) => res.json(await SubCategory.find()));
+app.get('/api/admin/subcategories', verifyAdmin, async (req, res) => {
+  const subcategories = await SubCategory.find();
+  res.json({ subcategories }); // Wrap the array in an object
+});
 app.post('/api/admin/subcategories', verifyAdmin, async (req, res) => res.json(await new SubCategory(req.body).save()));
 app.put('/api/admin/subcategories/:id', verifyAdmin, async (req, res) => res.json(await SubCategory.findByIdAndUpdate(req.params.id, req.body, { new: true })));
 app.delete('/api/admin/subcategories/:id', verifyAdmin, async (req, res) => res.json(await SubCategory.findByIdAndDelete(req.params.id)));
