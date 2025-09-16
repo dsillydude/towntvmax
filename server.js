@@ -60,7 +60,6 @@ const BannerSchema = new Schema({
   title: String,
   subtitle: String,
   imageUrl: String,
-  // THIS is the line that was changed
   actionType: { type: String, enum: ['content', 'channel', 'external', 'screen'], default: 'external' },
   actionValue: String,
   isVertical: { type: Boolean, default: false },
@@ -69,7 +68,6 @@ const BannerSchema = new Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-// ## PATCHED ChannelSchema ##
 const ChannelSchema = new Schema({
   channelId: { type: String, required: true, unique: true },
   name: { type: String, required: true },
@@ -78,13 +76,11 @@ const ChannelSchema = new Schema({
   subCategory: { type: String, default: 'all' },
   playbackUrl: { type: String, required: true },
 
-  // DRM
   drmEnabled: { type: Boolean, default: false },
   drmProvider: { type: String, enum: ['widevine', 'playready', 'clearkey', null], default: null },
   drmLicenseUrl: { type: String, default: null },
   drmHeaders: { type: Schema.Types.Mixed, default: {} },
 
-  // Extra headers
   cookieValue: { type: String, default: null },
   referrer: { type: String, default: null },
   origin: { type: String, default: null },
@@ -96,7 +92,6 @@ const ChannelSchema = new Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-// ## PATCHED ContentSchema ##
 const ContentSchema = new Schema({
   contentId: { type: String, required: true, unique: true },
   title: { type: String, required: true },
@@ -106,13 +101,11 @@ const ContentSchema = new Schema({
   subCategory: { type: String, default: 'all' },
   streamUrl: { type: String, required: true },
 
-  // DRM
   drmEnabled: { type: Boolean, default: false },
   drmProvider: { type: String, enum: ['widevine', 'playready', 'clearkey', null], default: null },
   drmLicenseUrl: { type: String, default: null },
   drmHeaders: { type: Schema.Types.Mixed, default: {} },
 
-  // Extra headers
   cookieValue: { type: String, default: null },
   referrer: { type: String, default: null },
   origin: { type: String, default: null },
@@ -124,23 +117,39 @@ const ContentSchema = new Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-// ✅ User Schema (installationId-based)
+// ✅ User Schema (installationId-based + phone + name)
 const UserSchema = new Schema({
   installationId: { type: String, required: true, unique: true },
-  deviceInfo: { type: String, default: "" },   // optional: OS, model, app version
+  deviceInfo: { type: String, default: "" },
+  name: { type: String, default: "" },
+  phoneNumber: { type: String, default: "" },
+  isActive: { type: Boolean, default: true },
+  isPremium: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now }
+});
+
+// ✅ Package Schema (admin-defined paywall packages)
+const PackageSchema = new Schema({
+  name: { type: String, required: true },
+  price: { type: Number, required: true },
+  currency: { type: String, default: "USD" },
+  validityDays: { type: Number, required: true },
   isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now }
 });
 
-// ✅ Subscription Schema (linked to installationId)
+// ✅ Subscription Schema (linked to user & package)
 const SubscriptionSchema = new Schema({
   subscriptionId: { type: String, required: true, unique: true },
   installationId: { type: String, required: true },
-  plan: { type: String, enum: ['free', 'premium', 'vip'], default: 'free' },
+  packageId: { type: Schema.Types.ObjectId, ref: "Package" },
   startDate: { type: Date, default: Date.now },
   endDate: { type: Date },
   isActive: { type: Boolean, default: true }
 });
+
+UserSchema.index({ installationId: 1 });
+SubscriptionSchema.index({ installationId: 1, isActive: 1, endDate: 1 });
 
 // Models
 const Admin = mongoose.model('Admin', AdminSchema);
@@ -149,6 +158,7 @@ const Banner = mongoose.model('Banner', BannerSchema);
 const Channel = mongoose.model('Channel', ChannelSchema);
 const Content = mongoose.model('Content', ContentSchema);
 const User = mongoose.model('User', UserSchema);
+const Package = mongoose.model('Package', PackageSchema);
 const Subscription = mongoose.model('Subscription', SubscriptionSchema);
 
 // Normalizers
@@ -161,7 +171,6 @@ function normalizeBanner(doc) {
   };
 }
 
-// ## PATCHED normalizeChannel ##
 function normalizeChannel(doc) {
   if (!doc) return null;
   return {
@@ -171,24 +180,20 @@ function normalizeChannel(doc) {
     category: doc.category,
     subCategory: doc.subCategory,
     playbackUrl: doc.playbackUrl,
-
     drmEnabled: !!doc.drmEnabled,
     drmProvider: doc.drmProvider,
     drmLicenseUrl: doc.drmLicenseUrl,
     drmHeaders: doc.drmHeaders || {},
-
     cookieValue: doc.cookieValue || null,
     referrer: doc.referrer || null,
     origin: doc.origin || null,
     customUserAgent: doc.customUserAgent || null,
-
     thumbnailUrl: doc.thumbnailUrl || null,
     isPremium: !!doc.isPremium,
     isActive: !!doc.isActive
   };
 }
 
-// ## PATCHED normalizeContent ##
 function normalizeContent(doc) {
   if (!doc) return null;
   return {
@@ -199,17 +204,14 @@ function normalizeContent(doc) {
     category: doc.category,
     subCategory: doc.subCategory,
     streamUrl: doc.streamUrl,
-
     drmEnabled: !!doc.drmEnabled,
     drmProvider: doc.drmProvider,
     drmLicenseUrl: doc.drmLicenseUrl,
     drmHeaders: doc.drmHeaders || {},
-
     cookieValue: doc.cookieValue || null,
     referrer: doc.referrer || null,
     origin: doc.origin || null,
     customUserAgent: doc.customUserAgent || null,
-
     posterUrl: doc.posterUrl || null,
     isPremium: !!doc.isPremium,
     isActive: !!doc.isActive
@@ -223,8 +225,24 @@ function normalizeUser(doc) {
     id: doc._id,
     installationId: doc.installationId,
     deviceInfo: doc.deviceInfo,
+    name: doc.name || "",
+    phoneNumber: doc.phoneNumber || "",
     isActive: doc.isActive,
+    isPremium: !!doc.isPremium,
     createdAt: doc.createdAt
+  };
+}
+
+// ✅ Package normalizer
+function normalizePackage(doc) {
+  if (!doc) return null;
+  return {
+    id: doc._id,
+    name: doc.name,
+    price: doc.price,
+    currency: doc.currency,
+    validityDays: doc.validityDays,
+    isActive: doc.isActive
   };
 }
 
@@ -235,13 +253,34 @@ function normalizeSubscription(doc) {
     id: doc._id,
     subscriptionId: doc.subscriptionId,
     installationId: doc.installationId,
-    plan: doc.plan,
+    packageId: doc.packageId,
     startDate: doc.startDate,
     endDate: doc.endDate,
     isActive: doc.isActive
   };
 }
 
+// ✅ Helper to fetch user + active subscription + package
+async function getUserWithSubscription(installationId) {
+  const user = await User.findOne({ installationId });
+  if (!user) return null;
+
+  const activeSub = await Subscription.findOne({
+    installationId,
+    isActive: true,
+    endDate: { $gte: new Date() }
+  }).populate("packageId");
+
+  return {
+    ...normalizeUser(user),
+    subscription: activeSub
+      ? {
+          ...normalizeSubscription(activeSub),
+          package: normalizePackage(activeSub.packageId)
+        }
+      : null
+  };
+}
 
 // Middleware: verify admin token
 function verifyAdmin(req, res, next) {
@@ -270,14 +309,20 @@ app.get('/api/banners', async (req, res) => {
 // ✅ Register installationId (called once by app on first run)
 app.post('/api/register-installation', async (req, res) => {
   try {
-    const { installationId, deviceInfo } = req.body;
+    const { installationId, deviceInfo, name, phoneNumber } = req.body;
     if (!installationId) return res.status(400).json({ error: 'installationId required' });
 
     let user = await User.findOne({ installationId });
     if (!user) {
-      user = await new User({ installationId, deviceInfo }).save();
+      user = await new User({ installationId, deviceInfo, name, phoneNumber }).save();
+    } else {
+      if (name) user.name = name;
+      if (phoneNumber) user.phoneNumber = phoneNumber;
+      await user.save();
     }
-    res.json({ user: normalizeUser(user) });
+
+    const userWithSub = await getUserWithSubscription(installationId);
+    res.json({ user: userWithSub });
   } catch (err) {
     res.status(500).json({ error: 'Failed to register installation' });
   }
@@ -410,14 +455,62 @@ app.delete('/api/admin/users/:id', verifyAdmin, async (req, res) =>
   res.json(await User.findByIdAndDelete(req.params.id))
 );
 
-// ✅ Admin: Subscriptions
-app.get('/api/admin/subscriptions', verifyAdmin, async (req, res) =>
-  res.json({ subscriptions: (await Subscription.find()).map(normalizeSubscription) })
+// ✅ Admin: Packages
+app.get('/api/admin/packages', verifyAdmin, async (req, res) =>
+  res.json({ packages: (await Package.find()).map(normalizePackage) })
 );
 
-app.post('/api/admin/subscriptions', verifyAdmin, async (req, res) =>
-  res.json(await new Subscription(req.body).save())
+app.post('/api/admin/packages', verifyAdmin, async (req, res) =>
+  res.json(await new Package(req.body).save())
 );
+
+app.put('/api/admin/packages/:id', verifyAdmin, async (req, res) =>
+  res.json(await Package.findByIdAndUpdate(req.params.id, req.body, { new: true }))
+);
+
+app.delete('/api/admin/packages/:id', verifyAdmin, async (req, res) =>
+  res.json(await Package.findByIdAndDelete(req.params.id))
+);
+
+// ✅ Admin: Subscriptions
+app.get('/api/admin/subscriptions', verifyAdmin, async (req, res) =>
+  res.json({
+    subscriptions: await Subscription.find().populate("packageId").then(list =>
+      list.map(s => ({
+        ...normalizeSubscription(s),
+        package: normalizePackage(s.packageId)
+      }))
+    )
+  })
+);
+
+app.post('/api/admin/subscriptions', verifyAdmin, async (req, res) => {
+  try {
+    const { installationId, packageId } = req.body;
+    const pkg = await Package.findById(packageId);
+    if (!pkg) return res.status(400).json({ error: 'Invalid packageId' });
+
+    const startDate = new Date();
+    const endDate = new Date();
+    endDate.setDate(startDate.getDate() + pkg.validityDays);
+
+    const subscription = await new Subscription({
+      subscriptionId: `${installationId}-${Date.now()}`,
+      installationId,
+      packageId,
+      startDate,
+      endDate,
+      isActive: true
+    }).save();
+
+    res.json({
+      ...normalizeSubscription(subscription),
+      package: normalizePackage(pkg)
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to create subscription' });
+  }
+});
 
 app.put('/api/admin/subscriptions/:id', verifyAdmin, async (req, res) =>
   res.json(await Subscription.findByIdAndUpdate(req.params.id, req.body, { new: true }))
@@ -427,8 +520,24 @@ app.delete('/api/admin/subscriptions/:id', verifyAdmin, async (req, res) =>
   res.json(await Subscription.findByIdAndDelete(req.params.id))
 );
 
+// ✅ Admin toggle premium flag on users
+app.put('/api/admin/users/:id/premium', verifyAdmin, async (req, res) => {
+  try {
+    const { isPremium } = req.body;
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { isPremium },
+      { new: true }
+    );
+    res.json(normalizeUser(user));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Start server
 const HOST = '0.0.0.0';
 app.listen(PORT, HOST, () => {
-  console.log(`✅ Server running at http://localhost:${PORT}`);
+  console.log(`✅ Server running on port ${PORT}`);
+
 });
