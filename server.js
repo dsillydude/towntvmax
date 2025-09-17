@@ -454,9 +454,22 @@ app.put('/api/admin/banners/:id', verifyAdmin, async (req, res) => res.json(awai
 app.delete('/api/admin/banners/:id', verifyAdmin, async (req, res) => res.json(await Banner.findByIdAndDelete(req.params.id)));
 
 app.get('/api/admin/channels', verifyAdmin, async (req, res) => res.json({ channels: (await Channel.find()).map(normalizeChannel) }));
-app.post('/api/admin/channels', verifyAdmin, async (req, res) => res.json(await new Channel(req.body).save()));
-app.put('/api/admin/channels/:id', verifyAdmin, async (req, res) => res.json(await Channel.findByIdAndUpdate(req.params.id, req.body, { new: true })));
-app.delete('/api/admin/channels/:id', verifyAdmin, async (req, res) => res.json(await Channel.findByIdAndDelete(req.params.id)));
+app.post('/api/admin/channels', verifyAdmin, async (req, res) => {
+  const newChannel = await new Channel(req.body).save();
+  res.json(normalizeChannel(newChannel));
+});
+
+app.put('/api/admin/channels/:id', verifyAdmin, async (req, res) => {
+  // FIX: Find by 'channelId' instead of '_id'
+  const updatedChannel = await Channel.findOneAndUpdate({ channelId: req.params.id }, req.body, { new: true });
+  res.json(normalizeChannel(updatedChannel));
+});
+
+app.delete('/api/admin/channels/:id', verifyAdmin, async (req, res) => {
+  // FIX: Find by 'channelId' instead of '_id'
+  await Channel.findOneAndDelete({ channelId: req.params.id });
+  res.status(204).send(); // Send a success status with no content
+});
 
 app.get('/api/admin/content', verifyAdmin, async (req, res) => res.json({ content: (await Content.find()).map(normalizeContent) }));
 app.post('/api/admin/content', verifyAdmin, async (req, res) => res.json(await new Content(req.body).save()));
