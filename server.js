@@ -145,7 +145,6 @@ const SubscriptionSchema = new Schema({
   isActive: { type: Boolean, default: true }
 });
 
-UserSchema.index({ installationId: 1 });
 SubscriptionSchema.index({ installationId: 1, isActive: 1, endDate: 1 });
 
 // Models
