@@ -256,7 +256,8 @@ function normalizeSubscription(doc) {
     id: doc._id,
     subscriptionId: doc.subscriptionId,
     installationId: doc.installationId,
-    packageId: doc.packageId,
+    // ✅ FIX: This now ensures packageId is always a string ID
+    packageId: doc.packageId?._id?.toString() || doc.packageId,
     startDate: doc.startDate,
     endDate: doc.endDate,
     isActive: doc.isActive
