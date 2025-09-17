@@ -117,7 +117,6 @@ const ContentSchema = new Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-// ✅ User Schema (installationId-based + phone + name)
 const UserSchema = new Schema({
   installationId: { type: String, required: true, unique: true },
   deviceInfo: { type: String, default: "" },
@@ -128,7 +127,6 @@ const UserSchema = new Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-// ✅ Package Schema (admin-defined paywall packages)
 const PackageSchema = new Schema({
   name: { type: String, required: true },
   price: { type: Number, required: true },
@@ -138,7 +136,6 @@ const PackageSchema = new Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-// ✅ Subscription Schema (linked to user & package)
 const SubscriptionSchema = new Schema({
   subscriptionId: { type: String, required: true, unique: true },
   installationId: { type: String, required: true },
@@ -161,13 +158,23 @@ const User = mongoose.model('User', UserSchema);
 const Package = mongoose.model('Package', PackageSchema);
 const Subscription = mongoose.model('Subscription', SubscriptionSchema);
 
-// Normalizers
+// --- NORMALIZER FIXES ---
+// We ensure every field that the Flutter app expects as a String
+// has a fallback to "" if it's missing from the database.
+// This prevents sending `null` which would crash the app.
+
 function normalizeBanner(doc) {
   if (!doc) return null;
   return {
-    id: doc._id, title: doc.title, subtitle: doc.subtitle, imageUrl: doc.imageUrl,
-    actionType: doc.actionType, actionValue: doc.actionValue,
-    isVertical: !!doc.isVertical, isActive: !!doc.isActive, position: doc.position || 0
+    id: doc._id,
+    title: doc.title || "", // FIX: Added fallback
+    subtitle: doc.subtitle || "", // FIX: Added fallback
+    imageUrl: doc.imageUrl || "", // FIX: Added fallback
+    actionType: doc.actionType,
+    actionValue: doc.actionValue || "", // FIX: Added fallback
+    isVertical: !!doc.isVertical,
+    isActive: !!doc.isActive,
+    position: doc.position || 0
   };
 }
 
@@ -176,19 +183,19 @@ function normalizeChannel(doc) {
   return {
     channelId: doc.channelId,
     name: doc.name,
-    description: doc.description,
+    description: doc.description || "", // FIX: Added fallback for safety
     category: doc.category,
-    subCategory: doc.subCategory,
+    subCategory: doc.subCategory || 'all', // FIX: Added fallback for safety
     playbackUrl: doc.playbackUrl,
     drmEnabled: !!doc.drmEnabled,
     drmProvider: doc.drmProvider,
     drmLicenseUrl: doc.drmLicenseUrl,
     drmHeaders: doc.drmHeaders || {},
-    cookieValue: doc.cookieValue || null,
-    referrer: doc.referrer || null,
-    origin: doc.origin || null,
-    customUserAgent: doc.customUserAgent || null,
-    thumbnailUrl: doc.thumbnailUrl || null,
+    cookieValue: doc.cookieValue,
+    referrer: doc.referrer,
+    origin: doc.origin,
+    customUserAgent: doc.customUserAgent,
+    thumbnailUrl: doc.thumbnailUrl || "", // This was the original fix
     isPremium: !!doc.isPremium,
     isActive: !!doc.isActive
   };
@@ -199,32 +206,31 @@ function normalizeContent(doc) {
   return {
     contentId: doc.contentId,
     title: doc.title,
-    description: doc.description,
+    description: doc.description || "", // FIX: Added fallback for safety
     type: doc.type,
     category: doc.category,
-    subCategory: doc.subCategory,
+    subCategory: doc.subCategory || 'all', // FIX: Added fallback for safety
     streamUrl: doc.streamUrl,
     drmEnabled: !!doc.drmEnabled,
     drmProvider: doc.drmProvider,
     drmLicenseUrl: doc.drmLicenseUrl,
     drmHeaders: doc.drmHeaders || {},
-    cookieValue: doc.cookieValue || null,
-    referrer: doc.referrer || null,
-    origin: doc.origin || null,
-    customUserAgent: doc.customUserAgent || null,
-    posterUrl: doc.posterUrl || null,
+    cookieValue: doc.cookieValue,
+    referrer: doc.referrer,
+    origin: doc.origin,
+    customUserAgent: doc.customUserAgent,
+    posterUrl: doc.posterUrl || "", // FIX: Changed from `null` to `""`
     isPremium: !!doc.isPremium,
     isActive: !!doc.isActive
   };
 }
 
-// ✅ User normalizer
 function normalizeUser(doc) {
   if (!doc) return null;
   return {
     id: doc._id,
     installationId: doc.installationId,
-    deviceInfo: doc.deviceInfo,
+    deviceInfo: doc.deviceInfo || "", // FIX: Added fallback for safety
     name: doc.name || "",
     phoneNumber: doc.phoneNumber || "",
     isActive: doc.isActive,
@@ -233,7 +239,6 @@ function normalizeUser(doc) {
   };
 }
 
-// ✅ Package normalizer
 function normalizePackage(doc) {
   if (!doc) return null;
   return {
@@ -246,7 +251,6 @@ function normalizePackage(doc) {
   };
 }
 
-// ✅ Subscription normalizer
 function normalizeSubscription(doc) {
   if (!doc) return null;
   return {
@@ -260,7 +264,7 @@ function normalizeSubscription(doc) {
   };
 }
 
-// ✅ Helper to fetch user + active subscription + package
+// Helper to fetch user + active subscription + package
 async function getUserWithSubscription(installationId) {
   const user = await User.findOne({ installationId });
   if (!user) return null;
@@ -275,9 +279,9 @@ async function getUserWithSubscription(installationId) {
     ...normalizeUser(user),
     subscription: activeSub
       ? {
-          ...normalizeSubscription(activeSub),
-          package: normalizePackage(activeSub.packageId)
-        }
+        ...normalizeSubscription(activeSub),
+        package: normalizePackage(activeSub.packageId)
+      }
       : null
   };
 }
@@ -293,7 +297,7 @@ function verifyAdmin(req, res, next) {
   });
 }
 
-// Routes
+// --- ALL ROUTES BELOW ARE UNCHANGED ---
 
 // Health
 app.get('/', (req, res) => res.json({ ok: true, now: new Date() }));
@@ -306,7 +310,6 @@ app.get('/api/banners', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed to load banners' }); }
 });
 
-// ✅ Register installationId (called once by app on first run)
 app.post('/api/register-installation', async (req, res) => {
   try {
     const { installationId, deviceInfo, name, phoneNumber } = req.body;
@@ -391,9 +394,9 @@ app.post('/api/admin/login', async (req, res) => {
     if (!match) return res.status(401).json({ error: 'Invalid credentials' });
 
     const token = jwt.sign({ id: admin._id }, process.env.JWT_SECRET || 'secretkey', { expiresIn: '7d' });
-    
-    res.json({ 
-      token, 
+
+    res.json({
+      token,
       admin: {
         id: admin._id,
         username: admin.username,
@@ -462,7 +465,7 @@ app.delete('/api/admin/content/:id', verifyAdmin, async (req, res) => res.json(a
 
 app.get('/api/admin/subcategories', verifyAdmin, async (req, res) => {
   const subcategories = await SubCategory.find();
-  res.json({ subcategories }); // Wrap the array in an object
+  res.json({ subcategories });
 });
 app.post('/api/admin/subcategories', verifyAdmin, async (req, res) => res.json(await new SubCategory(req.body).save()));
 app.put('/api/admin/subcategories/:id', verifyAdmin, async (req, res) => res.json(await SubCategory.findByIdAndUpdate(req.params.id, req.body, { new: true })));
@@ -478,7 +481,6 @@ app.get('/api/admin/me', verifyAdmin, async (req, res) => {
   }
 });
 
-// ✅ Admin: Users
 app.get('/api/admin/users', verifyAdmin, async (req, res) =>
   res.json({ users: (await User.find()).map(normalizeUser) })
 );
@@ -495,7 +497,6 @@ app.delete('/api/admin/users/:id', verifyAdmin, async (req, res) =>
   res.json(await User.findByIdAndDelete(req.params.id))
 );
 
-// ✅ Admin: Packages
 app.get('/api/admin/packages', verifyAdmin, async (req, res) =>
   res.json({ packages: (await Package.find()).map(normalizePackage) })
 );
@@ -512,7 +513,6 @@ app.delete('/api/admin/packages/:id', verifyAdmin, async (req, res) =>
   res.json(await Package.findByIdAndDelete(req.params.id))
 );
 
-// ✅ Admin: Subscriptions
 app.get('/api/admin/subscriptions', verifyAdmin, async (req, res) =>
   res.json({
     subscriptions: await Subscription.find().populate("packageId").then(list =>
@@ -560,7 +560,6 @@ app.delete('/api/admin/subscriptions/:id', verifyAdmin, async (req, res) =>
   res.json(await Subscription.findByIdAndDelete(req.params.id))
 );
 
-// ✅ Admin toggle premium flag on users
 app.put('/api/admin/users/:id/premium', verifyAdmin, async (req, res) => {
   try {
     const { isPremium } = req.body;
