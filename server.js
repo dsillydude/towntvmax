@@ -500,9 +500,10 @@ app.get('/api/admin/packages', verifyAdmin, async (req, res) =>
   res.json({ packages: (await Package.find()).map(normalizePackage) })
 );
 
-app.post('/api/admin/packages', verifyAdmin, async (req, res) =>
-  res.json(await new Package(req.body).save())
-);
+app.post('/api/admin/packages', verifyAdmin, async (req, res) => {
+  const newPackage = await new Package(req.body).save();
+  res.json(normalizePackage(newPackage));
+});
 
 app.put('/api/admin/packages/:id', verifyAdmin, async (req, res) =>
   res.json(await Package.findByIdAndUpdate(req.params.id, req.body, { new: true }))
