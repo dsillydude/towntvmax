@@ -68,7 +68,6 @@ const BannerSchema = new Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-// ✅ PATCH #1: ADDED 'drmClearKeys' TO THE SCHEMA
 const ChannelSchema = new Schema({
   channelId: { type: String, required: true, unique: true },
   name: { type: String, required: true },
@@ -76,18 +75,15 @@ const ChannelSchema = new Schema({
   category: { type: String, enum: ['sports', 'movies', 'series', 'trending'], required: true },
   subCategory: { type: String, default: 'all' },
   playbackUrl: { type: String, required: true },
-
   drmEnabled: { type: Boolean, default: false },
   drmProvider: { type: String, enum: ['widevine', 'playready', 'clearkey', null], default: null },
   drmLicenseUrl: { type: String, default: null },
   drmHeaders: { type: Schema.Types.Mixed, default: {} },
-  drmClearKeys: { type: Schema.Types.Mixed, default: null }, // <-- THIS LINE IS NEW
-
+  drmClearKeys: { type: Schema.Types.Mixed, default: null },
   cookieValue: { type: String, default: null },
   referrer: { type: String, default: null },
   origin: { type: String, default: null },
   customUserAgent: { type: String, default: null },
-
   thumbnailUrl: { type: String, default: "" },
   isPremium: { type: Boolean, default: false },
   isActive: { type: Boolean, default: true },
@@ -102,17 +98,14 @@ const ContentSchema = new Schema({
   category: { type: String, enum: ['sports', 'movies', 'series', 'trending'], required: true },
   subCategory: { type: String, default: 'all' },
   streamUrl: { type: String, required: true },
-
   drmEnabled: { type: Boolean, default: false },
   drmProvider: { type: String, enum: ['widevine', 'playready', 'clearkey', null], default: null },
   drmLicenseUrl: { type: String, default: null },
   drmHeaders: { type: Schema.Types.Mixed, default: {} },
-
   cookieValue: { type: String, default: null },
   referrer: { type: String, default: null },
   origin: { type: String, default: null },
   customUserAgent: { type: String, default: null },
-
   posterUrl: { type: String, default: "" },
   isPremium: { type: Boolean, default: false },
   isActive: { type: Boolean, default: true },
@@ -159,36 +152,33 @@ const User = mongoose.model('User', UserSchema);
 const Package = mongoose.model('Package', PackageSchema);
 const Subscription = mongoose.model('Subscription', SubscriptionSchema);
 
-// --- NORMALIZER FIXES ---
-// We ensure every field that the Flutter app expects as a String
-// has a fallback to "" if it's missing from the database.
-// This prevents sending `null` which would crash the app.
+// --- NORMALIZERS ---
+// These functions ensure the data sent to the Flutter app is clean and predictable.
 
 function normalizeBanner(doc) {
   if (!doc) return null;
   return {
     id: doc._id,
-    title: doc.title || "", // FIX: Added fallback
-    subtitle: doc.subtitle || "", // FIX: Added fallback
-    imageUrl: doc.imageUrl || "", // FIX: Added fallback
+    title: doc.title || "",
+    subtitle: doc.subtitle || "",
+    imageUrl: doc.imageUrl || "",
     actionType: doc.actionType,
-    actionValue: doc.actionValue || "", // FIX: Added fallback
+    actionValue: doc.actionValue || "",
     isVertical: !!doc.isVertical,
     isActive: !!doc.isActive,
     position: doc.position || 0
   };
 }
 
-// ✅ PATCH #2: ADDED 'drmClearKeys' TO THE NORMALIZER
 function normalizeChannel(doc) {
   if (!doc) return null;
   return {
     channelId: doc.channelId,
-    name: doc.name || "Unnamed Channel", // Added fallback
+    name: doc.name || "Unnamed Channel",
     description: doc.description || "",
     category: doc.category,
     subCategory: doc.subCategory || 'all',
-    playbackUrl: doc.playbackUrl || "", // Added fallback
+    playbackUrl: doc.playbackUrl || "",
     drmEnabled: !!doc.drmEnabled,
     drmProvider: doc.drmProvider,
     drmLicenseUrl: doc.drmLicenseUrl,
@@ -209,10 +199,10 @@ function normalizeContent(doc) {
   return {
     contentId: doc.contentId,
     title: doc.title,
-    description: doc.description || "", // FIX: Added fallback for safety
+    description: doc.description || "",
     type: doc.type,
     category: doc.category,
-    subCategory: doc.subCategory || 'all', // FIX: Added fallback for safety
+    subCategory: doc.subCategory || 'all',
     streamUrl: doc.streamUrl,
     drmEnabled: !!doc.drmEnabled,
     drmProvider: doc.drmProvider,
@@ -222,9 +212,23 @@ function normalizeContent(doc) {
     referrer: doc.referrer,
     origin: doc.origin,
     customUserAgent: doc.customUserAgent,
-    posterUrl: doc.posterUrl || "", // FIX: Changed from `null` to `""`
+    posterUrl: doc.posterUrl || "",
     isPremium: !!doc.isPremium,
     isActive: !!doc.isActive
+  };
+}
+
+// ✅ PATCH: ADDED A NEW NORMALIZER FOR SUBCATEGORIES
+function normalizeSubCategory(doc) {
+  if (!doc) return null;
+  return {
+    id: doc._id,
+    parentCategory: doc.parentCategory || '',
+    name: doc.name || '',
+    key: doc.key || '',
+    order: doc.order || 0,
+    // This !! idiom converts null/undefined to false, solving the Flutter error.
+    isActive: !!doc.isActive 
   };
 }
 
@@ -233,7 +237,7 @@ function normalizeUser(doc) {
   return {
     id: doc._id,
     installationId: doc.installationId,
-    deviceInfo: doc.deviceInfo || "", // FIX: Added fallback for safety
+    deviceInfo: doc.deviceInfo || "",
     name: doc.name || "",
     phoneNumber: doc.phoneNumber || "",
     isActive: doc.isActive,
@@ -260,7 +264,6 @@ function normalizeSubscription(doc) {
     id: doc._id,
     subscriptionId: doc.subscriptionId,
     installationId: doc.installationId,
-    // ✅ FIX: This now ensures packageId is always a string ID
     packageId: doc.packageId?._id?.toString() || doc.packageId,
     startDate: doc.startDate,
     endDate: doc.endDate,
@@ -268,29 +271,21 @@ function normalizeSubscription(doc) {
   };
 }
 
-// Helper to fetch user + active subscription + package
 async function getUserWithSubscription(installationId) {
   const user = await User.findOne({ installationId });
   if (!user) return null;
-
   const activeSub = await Subscription.findOne({
     installationId,
     isActive: true,
     endDate: { $gte: new Date() }
   }).populate("packageId");
-
   return {
     ...normalizeUser(user),
-    subscription: activeSub
-      ? {
-        ...normalizeSubscription(activeSub),
-        package: normalizePackage(activeSub.packageId)
-      }
-      : null
+    subscription: activeSub ? { ...normalizeSubscription(activeSub), package: normalizePackage(activeSub.packageId) } : null
   };
 }
 
-// Middleware: verify admin token
+// Middleware
 function verifyAdmin(req, res, next) {
   const token = req.headers['authorization']?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token provided' });
@@ -301,9 +296,8 @@ function verifyAdmin(req, res, next) {
   });
 }
 
-// --- ALL ROUTES BELOW ARE UNCHANGED ---
+// --- Routes ---
 
-// Health
 app.get('/', (req, res) => res.json({ ok: true, now: new Date() }));
 
 // Public routes
@@ -318,7 +312,6 @@ app.post('/api/register-installation', async (req, res) => {
   try {
     const { installationId, deviceInfo, name, phoneNumber } = req.body;
     if (!installationId) return res.status(400).json({ error: 'installationId required' });
-
     let user = await User.findOne({ installationId });
     if (!user) {
       user = await new User({ installationId, deviceInfo, name, phoneNumber }).save();
@@ -327,7 +320,6 @@ app.post('/api/register-installation', async (req, res) => {
       if (phoneNumber) user.phoneNumber = phoneNumber;
       await user.save();
     }
-
     const userWithSub = await getUserWithSubscription(installationId);
     res.json({ user: userWithSub });
   } catch (err) {
@@ -346,17 +338,15 @@ app.get('/api/subcategories', async (req, res) => {
 
 app.get('/api/channels', async (req, res) => {
   try {
-    const q = {};
+    const q = { isActive: true };
     if (req.query.category) q.category = req.query.category.toLowerCase();
     if (req.query.subCategory) q.subCategory = req.query.subCategory;
     if (req.query.isPremium !== undefined) q.isPremium = req.query.isPremium === 'true';
-    q.isActive = true;
     const list = await Channel.find(q).limit(200).sort({ createdAt: -1 });
     res.json({ channels: list.map(normalizeChannel) });
   } catch (err) { res.status(500).json({ error: 'Failed to load channels' }); }
 });
 
-// Get single channel by ID
 app.get('/api/channels/:id', async (req, res) => {
   try {
     const channel = await Channel.findOne({ channelId: req.params.id, isActive: true });
@@ -367,20 +357,17 @@ app.get('/api/channels/:id', async (req, res) => {
   }
 });
 
-
 app.get('/api/content', async (req, res) => {
   try {
-    const q = {};
+    const q = { isActive: true };
     if (req.query.category) q.category = req.query.category.toLowerCase();
     if (req.query.subCategory) q.subCategory = req.query.subCategory;
     if (req.query.isPremium !== undefined) q.isPremium = req.query.isPremium === 'true';
-    q.isActive = true;
     const list = await Content.find(q).limit(200).sort({ createdAt: -1 });
     res.json({ content: list.map(normalizeContent) });
   } catch (err) { res.status(500).json({ error: 'Failed to load content' }); }
 });
 
-// Get single content by ID
 app.get('/api/content/:id', async (req, res) => {
   try {
     const content = await Content.findOne({ contentId: req.params.id, isActive: true });
@@ -390,7 +377,6 @@ app.get('/api/content/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to load content' });
   }
 });
-
 
 app.get('/api/trending', async (req, res) => {
   try {
@@ -417,62 +403,24 @@ app.post('/api/admin/login', async (req, res) => {
     const { username, password } = req.body;
     const admin = await Admin.findOne({ username });
     if (!admin) return res.status(401).json({ error: 'Invalid credentials' });
-
     const match = await bcrypt.compare(password, admin.password);
     if (!match) return res.status(401).json({ error: 'Invalid credentials' });
-
     const token = jwt.sign({ id: admin._id }, process.env.JWT_SECRET || 'secretkey', { expiresIn: '7d' });
-
     res.json({
       token,
-      admin: {
-        id: admin._id,
-        username: admin.username,
-        email: admin.email || "",
-        role: "admin",
-        isActive: true,
-        createdAt: admin.createdAt || new Date(),
-        lastLogin: new Date()
-      }
+      admin: { id: admin._id, username: admin.username, email: admin.email || "", role: "admin", isActive: true, createdAt: admin.createdAt || new Date(), lastLogin: new Date() }
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/admin/stats', verifyAdmin, async (req, res) => {
   try {
-    const [
-      totalUsers,
-      premiumUsers,
-      activeSubscriptions,
-      totalPackages,
-      totalBanners,
-      totalChannels,
-      totalContent,
-      totalSubcategories,
-    ] = await Promise.all([
-      User.countDocuments(),
-      User.countDocuments({ isPremium: true }),
-      Subscription.countDocuments({ isActive: true, endDate: { $gte: new Date() } }),
-      Package.countDocuments(),
-      Banner.countDocuments(),
-      Channel.countDocuments(),
-      Content.countDocuments(),
-      SubCategory.countDocuments(),
+    const [totalUsers, premiumUsers, activeSubscriptions, totalPackages, totalBanners, totalChannels, totalContent, totalSubcategories] = await Promise.all([
+      User.countDocuments(), User.countDocuments({ isPremium: true }), Subscription.countDocuments({ isActive: true, endDate: { $gte: new Date() } }),
+      Package.countDocuments(), Banner.countDocuments(), Channel.countDocuments(), Content.countDocuments(), SubCategory.countDocuments(),
     ]);
-
-    res.json({
-      totalUsers,
-      premiumUsers,
-      activeSubscriptions,
-      totalPackages,
-      totalBanners,
-      totalChannels,
-      totalContent,
-      totalSubcategories,
-    });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to load dashboard stats' });
-  }
+    res.json({ totalUsers, premiumUsers, activeSubscriptions, totalPackages, totalBanners, totalChannels, totalContent, totalSubcategories });
+  } catch (err) { res.status(500).json({ error: 'Failed to load dashboard stats' }); }
 });
 
 // Protected CRUD
@@ -482,21 +430,39 @@ app.put('/api/admin/banners/:id', verifyAdmin, async (req, res) => res.json(awai
 app.delete('/api/admin/banners/:id', verifyAdmin, async (req, res) => res.json(await Banner.findByIdAndDelete(req.params.id)));
 
 app.get('/api/admin/channels', verifyAdmin, async (req, res) => res.json({ channels: (await Channel.find()).map(normalizeChannel) }));
+
+// ✅ PATCH: CREATE CHANNEL ROUTE (with ClearKey parsing)
 app.post('/api/admin/channels', verifyAdmin, async (req, res) => {
+  if (req.body.drmClearKeysCombined && typeof req.body.drmClearKeysCombined === 'string' && req.body.drmClearKeysCombined.includes(':')) {
+    const parts = req.body.drmClearKeysCombined.split(':');
+    if (parts.length === 2) {
+      req.body.drmClearKeys = { kid: parts[0].trim(), key: parts[1].trim() };
+    }
+    delete req.body.drmClearKeysCombined;
+  }
   const newChannel = await new Channel(req.body).save();
   res.json(normalizeChannel(newChannel));
 });
 
+// ✅ PATCH: UPDATE CHANNEL ROUTE (with ClearKey parsing)
 app.put('/api/admin/channels/:id', verifyAdmin, async (req, res) => {
-  // FIX: Find by 'channelId' instead of '_id'
+  if (req.body.drmClearKeysCombined && typeof req.body.drmClearKeysCombined === 'string' && req.body.drmClearKeysCombined.includes(':')) {
+    const parts = req.body.drmClearKeysCombined.split(':');
+    if (parts.length === 2) {
+      req.body.drmClearKeys = { kid: parts[0].trim(), key: parts[1].trim() };
+    }
+    delete req.body.drmClearKeysCombined;
+  } else if (req.body.hasOwnProperty('drmClearKeysCombined')) {
+    req.body.drmClearKeys = null;
+    delete req.body.drmClearKeysCombined;
+  }
   const updatedChannel = await Channel.findOneAndUpdate({ channelId: req.params.id }, req.body, { new: true });
   res.json(normalizeChannel(updatedChannel));
 });
 
 app.delete('/api/admin/channels/:id', verifyAdmin, async (req, res) => {
-  // FIX: Find by 'channelId' instead of '_id'
   await Channel.findOneAndDelete({ channelId: req.params.id });
-  res.status(204).send(); // Send a success status with no content
+  res.status(204).send();
 });
 
 app.get('/api/admin/content', verifyAdmin, async (req, res) => res.json({ content: (await Content.find()).map(normalizeContent) }));
@@ -504,12 +470,19 @@ app.post('/api/admin/content', verifyAdmin, async (req, res) => res.json(await n
 app.put('/api/admin/content/:id', verifyAdmin, async (req, res) => res.json(await Content.findByIdAndUpdate(req.params.id, req.body, { new: true })));
 app.delete('/api/admin/content/:id', verifyAdmin, async (req, res) => res.json(await Content.findByIdAndDelete(req.params.id)));
 
+// ✅ PATCH: SUBCATEGORY ADMIN ROUTES (now using the normalizer)
 app.get('/api/admin/subcategories', verifyAdmin, async (req, res) => {
   const subcategories = await SubCategory.find();
-  res.json({ subcategories });
+  res.json({ subcategories: subcategories.map(normalizeSubCategory) });
 });
-app.post('/api/admin/subcategories', verifyAdmin, async (req, res) => res.json(await new SubCategory(req.body).save()));
-app.put('/api/admin/subcategories/:id', verifyAdmin, async (req, res) => res.json(await SubCategory.findByIdAndUpdate(req.params.id, req.body, { new: true })));
+app.post('/api/admin/subcategories', verifyAdmin, async (req, res) => {
+  const newSub = await new SubCategory(req.body).save();
+  res.json(normalizeSubCategory(newSub));
+});
+app.put('/api/admin/subcategories/:id', verifyAdmin, async (req, res) => {
+  const updatedSub = await SubCategory.findByIdAndUpdate(req.params.id, req.body, { new: true });
+  res.json(normalizeSubCategory(updatedSub));
+});
 app.delete('/api/admin/subcategories/:id', verifyAdmin, async (req, res) => res.json(await SubCategory.findByIdAndDelete(req.params.id)));
 
 app.get('/api/admin/me', verifyAdmin, async (req, res) => {
@@ -522,98 +495,38 @@ app.get('/api/admin/me', verifyAdmin, async (req, res) => {
   }
 });
 
-app.get('/api/admin/users', verifyAdmin, async (req, res) =>
-  res.json({ users: (await User.find()).map(normalizeUser) })
-);
+app.get('/api/admin/users', verifyAdmin, async (req, res) => res.json({ users: (await User.find()).map(normalizeUser) }));
+app.post('/api/admin/users', verifyAdmin, async (req, res) => res.json(await new User(req.body).save()));
+app.put('/api/admin/users/:id', verifyAdmin, async (req, res) => res.json(await User.findByIdAndUpdate(req.params.id, req.body, { new: true })));
+app.delete('/api/admin/users/:id', verifyAdmin, async (req, res) => res.json(await User.findByIdAndDelete(req.params.id)));
 
-app.post('/api/admin/users', verifyAdmin, async (req, res) =>
-  res.json(await new User(req.body).save())
-);
+app.get('/api/admin/packages', verifyAdmin, async (req, res) => res.json({ packages: (await Package.find()).map(normalizePackage) }));
+app.post('/api/admin/packages', verifyAdmin, async (req, res) => res.json(normalizePackage(await new Package(req.body).save())));
+app.put('/api/admin/packages/:id', verifyAdmin, async (req, res) => res.json(await Package.findByIdAndUpdate(req.params.id, req.body, { new: true })));
+app.delete('/api/admin/packages/:id', verifyAdmin, async (req, res) => res.json(await Package.findByIdAndDelete(req.params.id)));
 
-app.put('/api/admin/users/:id', verifyAdmin, async (req, res) =>
-  res.json(await User.findByIdAndUpdate(req.params.id, req.body, { new: true }))
-);
-
-app.delete('/api/admin/users/:id', verifyAdmin, async (req, res) =>
-  res.json(await User.findByIdAndDelete(req.params.id))
-);
-
-app.get('/api/admin/packages', verifyAdmin, async (req, res) =>
-  res.json({ packages: (await Package.find()).map(normalizePackage) })
-);
-
-app.post('/api/admin/packages', verifyAdmin, async (req, res) => {
-  const newPackage = await new Package(req.body).save();
-  res.json(normalizePackage(newPackage));
-});
-
-app.put('/api/admin/packages/:id', verifyAdmin, async (req, res) =>
-  res.json(await Package.findByIdAndUpdate(req.params.id, req.body, { new: true }))
-);
-
-app.delete('/api/admin/packages/:id', verifyAdmin, async (req, res) =>
-  res.json(await Package.findByIdAndDelete(req.params.id))
-);
-
-app.get('/api/admin/subscriptions', verifyAdmin, async (req, res) =>
-  res.json({
-    subscriptions: await Subscription.find().populate("packageId").then(list =>
-      list.map(s => ({
-        ...normalizeSubscription(s),
-        package: normalizePackage(s.packageId)
-      }))
-    )
-  })
-);
-
+app.get('/api/admin/subscriptions', verifyAdmin, async (req, res) => res.json({ subscriptions: await Subscription.find().populate("packageId").then(list => list.map(s => ({ ...normalizeSubscription(s), package: normalizePackage(s.packageId) }))) }));
 app.post('/api/admin/subscriptions', verifyAdmin, async (req, res) => {
   try {
     const { installationId, packageId } = req.body;
     const pkg = await Package.findById(packageId);
     if (!pkg) return res.status(400).json({ error: 'Invalid packageId' });
-
     const startDate = new Date();
     const endDate = new Date();
     endDate.setDate(startDate.getDate() + pkg.validityDays);
-
-    const subscription = await new Subscription({
-      subscriptionId: `${installationId}-${Date.now()}`,
-      installationId,
-      packageId,
-      startDate,
-      endDate,
-      isActive: true
-    }).save();
-
-    res.json({
-      ...normalizeSubscription(subscription),
-      package: normalizePackage(pkg)
-    });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to create subscription' });
-  }
+    const subscription = await new Subscription({ subscriptionId: `${installationId}-${Date.now()}`, installationId, packageId, startDate, endDate, isActive: true }).save();
+    res.json({ ...normalizeSubscription(subscription), package: normalizePackage(pkg) });
+  } catch (err) { res.status(500).json({ error: 'Failed to create subscription' }); }
 });
 
-app.put('/api/admin/subscriptions/:id', verifyAdmin, async (req, res) =>
-  res.json(await Subscription.findByIdAndUpdate(req.params.id, req.body, { new: true }))
-);
-
-app.delete('/api/admin/subscriptions/:id', verifyAdmin, async (req, res) =>
-  res.json(await Subscription.findByIdAndDelete(req.params.id))
-);
-
+app.put('/api/admin/subscriptions/:id', verifyAdmin, async (req, res) => res.json(await Subscription.findByIdAndUpdate(req.params.id, req.body, { new: true })));
+app.delete('/api/admin/subscriptions/:id', verifyAdmin, async (req, res) => res.json(await Subscription.findByIdAndDelete(req.params.id)));
 app.put('/api/admin/users/:id/premium', verifyAdmin, async (req, res) => {
   try {
     const { isPremium } = req.body;
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
-      { isPremium },
-      { new: true }
-    );
+    const user = await User.findByIdAndUpdate(req.params.id, { isPremium }, { new: true });
     res.json(normalizeUser(user));
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Start server
@@ -621,3 +534,4 @@ const HOST = '0.0.0.0';
 app.listen(PORT, HOST, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
