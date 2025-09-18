@@ -356,6 +356,18 @@ app.get('/api/channels', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed to load channels' }); }
 });
 
+// Get single channel by ID
+app.get('/api/channels/:id', async (req, res) => {
+  try {
+    const channel = await Channel.findOne({ channelId: req.params.id, isActive: true });
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    res.json({ channel: normalizeChannel(channel) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load channel' });
+  }
+});
+
+
 app.get('/api/content', async (req, res) => {
   try {
     const q = {};
@@ -367,6 +379,18 @@ app.get('/api/content', async (req, res) => {
     res.json({ content: list.map(normalizeContent) });
   } catch (err) { res.status(500).json({ error: 'Failed to load content' }); }
 });
+
+// Get single content by ID
+app.get('/api/content/:id', async (req, res) => {
+  try {
+    const content = await Content.findOne({ contentId: req.params.id, isActive: true });
+    if (!content) return res.status(404).json({ error: 'Content not found' });
+    res.json({ content: normalizeContent(content) });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load content' });
+  }
+});
+
 
 app.get('/api/trending', async (req, res) => {
   try {
