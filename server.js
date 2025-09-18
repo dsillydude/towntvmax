@@ -68,6 +68,7 @@ const BannerSchema = new Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+// ✅ PATCH #1: ADDED 'drmClearKeys' TO THE SCHEMA
 const ChannelSchema = new Schema({
   channelId: { type: String, required: true, unique: true },
   name: { type: String, required: true },
@@ -80,6 +81,7 @@ const ChannelSchema = new Schema({
   drmProvider: { type: String, enum: ['widevine', 'playready', 'clearkey', null], default: null },
   drmLicenseUrl: { type: String, default: null },
   drmHeaders: { type: Schema.Types.Mixed, default: {} },
+  drmClearKeys: { type: Schema.Types.Mixed, default: null }, // <-- THIS LINE IS NEW
 
   cookieValue: { type: String, default: null },
   referrer: { type: String, default: null },
@@ -177,6 +179,7 @@ function normalizeBanner(doc) {
   };
 }
 
+// ✅ PATCH #2: ADDED 'drmClearKeys' TO THE NORMALIZER
 function normalizeChannel(doc) {
   if (!doc) return null;
   return {
@@ -190,6 +193,7 @@ function normalizeChannel(doc) {
     drmProvider: doc.drmProvider,
     drmLicenseUrl: doc.drmLicenseUrl,
     drmHeaders: doc.drmHeaders || {},
+    drmClearKeys: doc.drmClearKeys, // <-- THIS LINE IS NEW
     cookieValue: doc.cookieValue,
     referrer: doc.referrer,
     origin: doc.origin,
@@ -592,5 +596,4 @@ app.put('/api/admin/users/:id/premium', verifyAdmin, async (req, res) => {
 const HOST = '0.0.0.0';
 app.listen(PORT, HOST, () => {
   console.log(`✅ Server running on port ${PORT}`);
-
 });
