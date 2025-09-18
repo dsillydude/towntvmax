@@ -184,21 +184,21 @@ function normalizeChannel(doc) {
   if (!doc) return null;
   return {
     channelId: doc.channelId,
-    name: doc.name,
-    description: doc.description || "", // FIX: Added fallback for safety
+    name: doc.name || "Unnamed Channel", // Added fallback
+    description: doc.description || "",
     category: doc.category,
-    subCategory: doc.subCategory || 'all', // FIX: Added fallback for safety
-    playbackUrl: doc.playbackUrl,
+    subCategory: doc.subCategory || 'all',
+    playbackUrl: doc.playbackUrl || "", // Added fallback
     drmEnabled: !!doc.drmEnabled,
     drmProvider: doc.drmProvider,
     drmLicenseUrl: doc.drmLicenseUrl,
     drmHeaders: doc.drmHeaders || {},
-    drmClearKeys: doc.drmClearKeys, // <-- THIS LINE IS NEW
+    drmClearKeys: doc.drmClearKeys,
     cookieValue: doc.cookieValue,
     referrer: doc.referrer,
     origin: doc.origin,
     customUserAgent: doc.customUserAgent,
-    thumbnailUrl: doc.thumbnailUrl || "", // This was the original fix
+    thumbnailUrl: doc.thumbnailUrl || "",
     isPremium: !!doc.isPremium,
     isActive: !!doc.isActive
   };
