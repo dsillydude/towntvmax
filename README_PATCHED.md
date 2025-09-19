@@ -1,3 +1,0 @@
-# Townmax Patched Project
-
-Steps to run backend and frontend...
