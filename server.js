@@ -67,7 +67,7 @@ async function loadSettingsFromDatabase() {
 }
 
 // IMPORTANT: Using your app's specific MongoDB URI from your environment
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://mackdsilly:Ourfam2019@kijiwenitvmaxdb.9accsfs.mongodb.net/?retryWrites=true&w=majority&appName=kijiweniTvMaxDB';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://townmaxdb:2016Brianna@townmax.fze1itu.mongodb.net/?retryWrites=true&w=majority&appName=townmax';
 
 mongoose.connect(MONGODB_URI)
   .then(() => {
