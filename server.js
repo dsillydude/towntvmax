@@ -419,7 +419,7 @@ app.get('/api/admin/me', authenticateAdmin, async (req, res) => {
 // =================================================================
 // ADMIN: DASHBOARD STATS
 // =================================================================
-app.get('/api/admin/dashboard', authenticateAdmin, async (req, res) => {
+app.get('/api/admin/dashboard', async (req, res) => {
   try {
     const userCount = await User.countDocuments();
     const channelCount = await Channel.countDocuments();
