@@ -107,7 +107,9 @@ const AdminSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   lastLogin: { type: Date }
 });
-const Admin = mongoose.model('Admin', AdminSchema);
+// Explicitly tell Mongoose to use the 'admins' collection
+const Admin = mongoose.model('Admin', AdminSchema, 'admins');
+
 
 const ChannelSchema = new mongoose.Schema({
   channelId: { type: String, unique: true, required: true },
@@ -361,22 +363,55 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
   }
 });
 
+// =================================================================
+// PATCHED ADMIN LOGIN ROUTE WITH LOGGING
+// =================================================================
 app.post('/api/admin/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-    if (!username || !password) return res.status(400).json({ error: 'Username and password are required' });
 
+    // --- LOG 1: Log the incoming request ---
+    console.log(`[LOGIN ATTEMPT] Received login request for username: '${username}'`);
+
+    if (!username || !password) {
+      console.log('[LOGIN FAILED] Missing username or password.');
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
+
+    // Find the admin user by username (or email) in the 'admins' collection
     const admin = await Admin.findOne({ $or: [{ username }, { email: username }], isActive: true });
-    if (!admin || !(await bcrypt.compare(password, admin.password))) {
+
+    // --- LOG 2: Log whether a user was found ---
+    if (admin) {
+        console.log(`[LOGIN ATTEMPT] Found user in database: ${admin.username} (ID: ${admin._id})`);
+    } else {
+        console.log(`[LOGIN FAILED] No active user found for username: '${username}'`);
+        // We still return the same generic error for security
         return res.status(401).json({ error: 'Invalid credentials' });
     }
 
+    // Compare the provided password with the stored hash
+    const isMatch = await bcrypt.compare(password, admin.password);
+
+    // --- LOG 3: Log the password comparison result ---
+    console.log(`[LOGIN ATTEMPT] Password match for '${username}': ${isMatch}`);
+
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // If everything is correct, update last login and generate token
     admin.lastLogin = new Date();
     await admin.save();
+    
+    console.log(`[LOGIN SUCCESS] User '${username}' logged in successfully.`);
 
     const token = generateToken(admin, true);
     res.json({ message: 'Admin login successful', admin: transformDoc(admin), token });
+
   } catch (error) {
+    // --- LOG 4: Log any unexpected errors ---
+    console.error('[LOGIN ERROR] An unexpected error occurred:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
