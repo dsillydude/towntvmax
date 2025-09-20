@@ -1,9 +1,12 @@
-/* * =================================================================
- * TV MAX Backend Server - Cloned from working version
- * -----------------------------------------------------------------
- * This is a direct clone of the user's provided working server.js.
- * It uses environment variables for configuration.
- * =================================================================
+/*
+ * Town Tv Max Backend — Stricter UUID Version
+ * --------------------------------------------------------------
+ * Patches applied:
+ * ... (previous patches)
+ * 30) APPLIED: Removed all deviceId and phoneNumber fallbacks.
+ * - Webhook and status endpoints now ONLY use installationId.
+ * - Removed legacy /api/users/log-install endpoint.
+ * - System is now strictly based on unique installationId (UUID).
  */
 
 const express = require('express');
@@ -12,633 +15,1426 @@ const Joi = require('joi');
 const cors = require('cors');
 const helmet = require('helmet');
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 const crypto = require('crypto');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
 
 // --- Middleware ------------------------------------------------------------
 app.use(helmet());
-app.use(cors({
-  // IMPORTANT: Using your app's specific allowed origins from your environment
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || ['https://towntvmax.onrender.com', 'http://localhost:3000'],
-  credentials: true
-}));
-app.use(express.json({ limit: '10mb' }));
+app.use(cors());
+app.use(express.json({ limit: '1mb' }));
 
-// Trust proxy to get the correct IP address when deployed
 app.set('trust proxy', true);
 
-// Static file serving for uploaded images
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
 // --- MongoDB Connection ----------------------------------------------------
-const SettingSchema = new mongoose.Schema({
-  key: { type: String, unique: true, required: true },
-  value: { type: mongoose.Schema.Types.Mixed, required: true },
-});
-const Setting = mongoose.model('Setting', SettingSchema);
-
-async function loadSettingsFromDatabase() {
-  try {
-    const plansSetting = await Setting.findOne({ key: 'subscriptionPlans' });
-    if (plansSetting) {
-      SUBSCRIPTION_PLANS = plansSetting.value;
-      console.log('✅ Subscription plans loaded from database.');
-    } else {
-      await new Setting({ key: 'subscriptionPlans', value: SUBSCRIPTION_PLANS }).save();
-      console.log('✅ Default subscription plans saved to database for the first time.');
-    }
-  } catch (error) {
-    console.error('❌ Failed to load settings from database:', error);
-  }
-}
-
-// IMPORTANT: Using your app's specific MongoDB URI from your environment
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://townmaxdb:2016Brianna@townmax.fze1itu.mongodb.net/?retryWrites=true&w=majority&appName=townmax';
+const MONGODB_URI = process.env.MONGODB_URI ||
+  'mongodb+srv://townmaxdb:2016Brianna@townmax.fze1itu.mongodb.net/townmax?retryWrites=true&w=majority&appName=townmax';
 
 mongoose.connect(MONGODB_URI)
-  .then(() => {
-    console.log('✅ Connected to MongoDB');
-    loadSettingsFromDatabase();
-    loadAppSettings();
-  })
-  .catch(err => console.error('❌ MongoDB connection error:', err));
+  .then(() => console.log('Connected to MongoDB'))
+  .catch(err => console.error('MongoDB connection error:', err));
 
-// --- Constants & Config ---------------------------------------------------
-let SUBSCRIPTION_PLANS = {
-    weekly: { durationDays: 7, amount: 1000 },
-    monthly: { durationDays: 30, amount: 3000 },
-    yearly: { durationDays: 365, amount: 30000 },
-};
-
-// --- Database Models -------------------------------------------------------
-const UserSchema = new mongoose.Schema({
-  installationId: { type: String, unique: true, sparse: true },
-  email: { type: String, unique: true, sparse: true },
-  password: { type: String },
-  phoneNumber: { type: String, unique: true, sparse: true },
-  isPremium: { type: Boolean, default: false },
-  premiumExpiryDate: { type: Date },
-  lastLogin: { type: Date },
-  isActive: { type: Boolean, default: true }
-}, { timestamps: true });
-const User = mongoose.model('User', UserSchema);
-
-const AdminSchema = new mongoose.Schema({
-  id: { type: String, default: uuidv4, unique: true },
-  username: { type: String, unique: true, required: true },
-  email: { type: String, unique: true, required: true },
-  password: { type: String, required: true },
-  role: { type: String, enum: ['admin', 'super_admin'], default: 'admin' },
-  isActive: { type: Boolean, default: true },
-  createdAt: { type: Date, default: Date.now },
-  lastLogin: { type: Date }
-});
-// Explicitly tell Mongoose to use the 'admins' collection
-const Admin = mongoose.model('Admin', AdminSchema, 'admins');
-
-
-const ChannelSchema = new mongoose.Schema({
-  channelId: { type: String, unique: true, required: true },
-  name: { type: String, required: true },
-  description: { type: String },
-  category: { type: String, required: true },
-  playbackUrl: { type: String },
-  drm: {
-    enabled: { type: Boolean },
-    provider: { type: String },
-    key: { type: String },
-  },
-  thumbnailUrl: { type: String },
-  isPremium: { type: Boolean, default: false },
-  isActive: { type: Boolean, default: true },
-  position: { type: Number, default: 0 },
-  assignedContent: [{ type: String }],
-  createdAt: { type: Date, default: Date.now }
-});
-const Channel = mongoose.model('Channel', ChannelSchema);
-
-
-const HeroBannerSchema = new mongoose.Schema({
-  id: { type: String, default: uuidv4, unique: true },
-  title: { type: String, required: true },
-  description: { type: String },
-  imageUrl: { type: String, required: true },
-  actionType: { type: String, enum: ['channel', 'content', 'external'], required: true },
-  actionValue: { type: String },
-  isActive: { type: Boolean, default: true },
-  position: { type: Number, default: 0 },
-  createdAt: { type: Date, default: Date.now }
-});
-const HeroBanner = mongoose.model('HeroBanner', HeroBannerSchema);
-
-const PaymentSchema = new mongoose.Schema({
-  orderId: { type: String, required: true, unique: true },
-  userId: { type: String },
-  installationId: { type: String, index: true },
-  phoneNumber: { type: String, index: true },
-  customerName: { type: String },
-  amount: { type: Number, required: true },
-  currency: { type: String, default: 'TZS' },
-  paymentMethod: { type: String, default: 'ZenoPay' },
-  zenoTransactionId: { type: String },
-  status: { type: String, enum: ['pending', 'completed', 'failed'], default: 'pending' },
-  subscriptionType: { type: String, required: true },
-  createdAt: { type: Date, default: Date.now }
-});
-const Payment = mongoose.model('Payment', PaymentSchema);
-
-// ADDED: Subscription model for dashboard stats
-const SubscriptionSchema = new mongoose.Schema({
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    plan: { type: String },
-    startDate: { type: Date },
-    endDate: { type: Date },
-}, { timestamps: true });
-const Subscription = mongoose.model('Subscription', SubscriptionSchema);
-
-
-// --- Helper Functions ------------------------------------------------------
+// --- Helpers ---------------------------------------------------------------
 function transformDoc(doc) {
   if (!doc) return null;
   const obj = doc.toObject ? doc.toObject() : { ...doc };
-
-  const isChannel = obj.hasOwnProperty('channelId') || obj.hasOwnProperty('playbackUrl');
-  if (isChannel) {
-    if (!obj.playbackUrl && obj.streamUrl) obj.playbackUrl = obj.streamUrl;
-    if (!obj.drm) {
-      obj.drm = {
-        enabled: obj.drmEnabled || false,
-        key: obj.drmKey || null,
-        provider: null
-      };
-    }
-    delete obj.drmEnabled;
-    delete obj.drmKey;
-  }
-
-  obj.id = obj._id?.toString() || obj.id;
   delete obj.password;
+  obj.id = obj._id?.toString?.() || obj.id;
   delete obj._id;
   delete obj.__v;
   return obj;
 }
-
 function transformArray(docs) {
   return (docs || []).map(transformDoc);
 }
 
-async function loadAppSettings() {
-  try {
-    const whatsappSetting = await Setting.findOne({ key: 'whatsappLink' });
-    if (whatsappSetting) {
-      appSettings.whatsappLink = whatsappSetting.value;
-      console.log('✅ WhatsApp link loaded from database.');
-    } else {
-      await new Setting({
-        key: 'whatsappLink',
-        value: appSettings.whatsappLink
-      }).save();
-      console.log('✅ Default WhatsApp link saved to database.');
-    }
-  } catch (error) {
-    console.error('❌ Failed to load WhatsApp link from database:', error);
+function formatPhone(phone) {
+  if (!phone) return '';
+  const digits = phone.replace(/\D/g, '');
+  if (digits.startsWith('255') && digits.length === 12) {
+    return '0' + digits.substring(3);
   }
-}
-
-function generateToken(user, isAdmin = false) {
-  const payload = isAdmin ? {
-    adminId: user.id || user._id,
-    username: user.username,
-    role: user.role
-  } : {
-    userId: user.id || user._id,
-    installationId: user.installationId, // Use installationId in token
-    isPremium: user.isPremium
-  };
-
-  return jwt.sign(payload, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || '30d'
-  });
-}
-
-function authenticateToken(req, res, next) {
-  const authHeader = req.headers.authorization;
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ error: 'Access token required' });
+  if ((digits.startsWith('7') || digits.startsWith('6')) && digits.length === 9) {
+    return '0' + digits;
   }
-
-  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-    if (err) {
-      return res.status(403).json({ error: 'Invalid or expired token' });
-    }
-    req.user = user;
-    next();
-  });
-}
-
-function authenticateAdmin(req, res, next) {
-    const authHeader = req.headers.authorization;
-    const token = authHeader && authHeader.split(' ')[1];
-
-    if (!token) return res.status(401).json({ error: 'Admin access token required' });
-
-    jwt.verify(token, process.env.JWT_SECRET, async (err, decoded) => {
-        if (err) return res.status(403).json({ error: 'Invalid or expired admin token' });
-        if (!decoded.adminId) return res.status(403).json({ error: 'Admin access required' });
-
-        try {
-            const admin = await Admin.findById(decoded.adminId);
-            if (!admin || !admin.isActive) return res.status(403).json({ error: 'Admin not found or inactive' });
-            req.admin = decoded;
-            next();
-        } catch (error) {
-            return res.status(500).json({ error: 'Internal server error' });
-        }
-    });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, 'uploads/'),
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  if (digits.startsWith('07') && digits.length === 10) {
+    return digits;
   }
+  return phone;
+}
+
+
+// --- Schemas & Models ------------------------------------------------------
+const channelSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  channelId: { type: String, required: true, unique: true },
+  playbackUrl: { type: String, required: true },
+  drm: {
+    enabled: { type: Boolean, default: false },
+    provider: { type: String, enum: ['clearkey', 'none', 'widevine'], default: 'none' },
+    key: { type: String, default: '' },
+    licenseServer: { type: String, default: '' },
+  },
+  playbackHeaders: { type: Map, of: String, default: {} },
+  category: { type: String, enum: ['sports', 'mziki', 'mengineyo', 'burudani'], default: 'sports' },
+  description: { type: String, default: '' },
+  thumbnailUrl: { type: String, default: '' },
+  status: { type: Boolean, default: true },
+  tag: { type: String, default: '' },
+  position: { type: Number, default: 999 },
+  
+}, { timestamps: true });
+
+const settingsSchema = new mongoose.Schema({
+  key: { type: String, required: true, unique: true },
+  value: { type: String, required: true },
+  description: { type: String, default: '' },
+}, { timestamps: true });
+
+const sliderSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  description: { type: String, default: '' },
+  image_url: { type: String, required: true },
+  action_url: { type: String, default: '' },
+  is_active: { type: Boolean, default: true },
+  order_index: { type: Number, default: 0 },
+  type: {
+    type: String,
+    enum: ['hero', 'promo'],
+    default: 'hero'
+  }
+}, { timestamps: true });
+
+const notificationSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  message: { type: String, required: true },
+  target_audience: { type: String, enum: ['all', 'paid', 'free'], default: 'all' },
+  status: { type: String, enum: ['draft', 'sent', 'scheduled'], default: 'draft' },
+  sent_count: { type: Number, default: 0 },
+  scheduled_at: { type: Date },
+  sent_at: { type: Date },
+}, { timestamps: true });
+
+const userSchema = new mongoose.Schema({
+  name: { type: String },
+  installationId: { type: String, unique: true, sparse: true }, // ✅ Main unique identity (UUID)
+  deviceId: { type: String, index: true, sparse: true },        // For analytics/info only
+  phoneNumber: { type: String, unique: true, sparse: true },   // Can be linked to one user
+  is_premium: { type: Boolean, default: false },
+  subscriptionEndDate: { type: Date },
+  last_login: { type: Date, default: Date.now },
+  username: { type: String, sparse: true },
+  email: { type: String, sparse: true },
+}, { timestamps: true });
+
+const transactionSchema = new mongoose.Schema({
+  orderId: { type: String, required: true, unique: true },
+  phoneNumber: { type: String, required: true },
+  name: { type: String, required: true },
+  packageTitle: { type: String },
+  price: { type: Number },
+  status: { type: String, enum: ['PENDING', 'COMPLETED', 'FAILED', 'CANCELLED', 'EXPIRED'], default: 'PENDING' },
+  token: { type: String },
+  deviceId: { type: String }, // For analytics/info only
+  installationId: { type: String }, // The ONLY link to a user
+}, { timestamps: true });
+
+const Channel = mongoose.model('Channel', channelSchema);
+const Settings = mongoose.model('Settings', settingsSchema);
+const Slider = mongoose.model('Slider', sliderSchema);
+const Notification = mongoose.model('Notification', notificationSchema);
+const User = mongoose.model('User', userSchema);
+const Transaction = mongoose.model('Transaction', transactionSchema);
+
+// --- Validation Schemas ----------------------------------------------------
+const channelValidationSchema = Joi.object({
+  name: Joi.string().required(),
+  channelId: Joi.string().required(),
+  playbackUrl: Joi.string().uri().required(),
+  drm: Joi.object({
+    enabled: Joi.boolean(),
+    provider: Joi.string().valid('clearkey', 'none', 'widevine'),
+    key: Joi.string().allow(''),
+    licenseServer: Joi.string().uri().allow(''),
+  }),
+  playbackHeaders: Joi.object().pattern(Joi.string(), Joi.string()),
+  category: Joi.string().valid('sports', 'mziki', 'mengineyo', 'burudani'),
+  description: Joi.string().allow(''),
+  thumbnailUrl: Joi.string().uri().allow(''),
+  status: Joi.boolean(),
+  tag: Joi.string().allow(''),
+  position: Joi.number(),
+}).unknown(true);
+
+const settingsValidationSchema = Joi.object({
+  key: Joi.string().required(),
+  value: Joi.string().required(),
+  description: Joi.string().allow(''),
 });
 
-const upload = multer({
-  storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
-  fileFilter: (req, file, cb) => {
-    file.mimetype.startsWith('image/') ? cb(null, true) : cb(new Error('Only image files are allowed!'), false);
-  }
+const sliderValidationSchema = Joi.object({
+  title: Joi.string().required(),
+  description: Joi.string().allow(''),
+  image_url: Joi.string().uri().required(),
+  action_url: Joi.string().uri().allow(''),
+  is_active: Joi.boolean(),
+  order_index: Joi.number(),
+  type: Joi.string().valid('hero', 'promo'),
 });
 
-// --- API Routes ------------------------------------------------------------
+const notificationValidationSchema = Joi.object({
+  title: Joi.string().required(),
+  message: Joi.string().required(),
+  target_audience: Joi.string().valid('all', 'paid', 'free'),
+  scheduled_at: Joi.date().iso(),
+});
 
-let appSettings = {
-  whatsappLink: process.env.WHATSAPP_LINK || 'https://wa.me/255685551925'
+// --- Enhanced In-Memory Settings Cache ------------------------------------
+const settingsCache = {
+  map: new Map(),
+  lastLoadedAt: 0,
+  ttlMs: Number(process.env.SETTINGS_CACHE_TTL_MS || 60_000),
 };
 
-app.get('/api/config', (req, res) => res.json(appSettings));
+async function hydrateSettingsCache() {
+  console.log('🔄 Refreshing settings cache...');
+  const all = await Settings.find({}).lean();
+  settingsCache.map.clear();
+  for (const s of all) settingsCache.map.set(s.key, s.value);
+  settingsCache.lastLoadedAt = Date.now();
+  console.log(`✅ Settings cache refreshed with ${settingsCache.map.size} keys`);
+  return settingsCache.map.size;
+}
 
-app.put('/api/admin/config', authenticateAdmin, async (req, res) => {
-  try {
-    const { whatsappLink } = req.body;
-    if (whatsappLink) {
-      appSettings.whatsappLink = whatsappLink;
-      await Setting.findOneAndUpdate({ key: 'whatsappLink' }, { value: whatsappLink }, { upsert: true });
-    }
-    res.json({ message: 'Settings updated successfully', settings: appSettings });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to update settings' });
-  }
-});
-
-app.get('/api/subscriptions/plans', async (req, res) => {
-  try {
-    const plansSetting = await Setting.findOne({ key: 'subscriptionPlans' });
-    res.json({ plans: plansSetting?.value || SUBSCRIPTION_PLANS });
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Backend is running', timestamp: new Date().toISOString() });
-});
-
-app.post('/api/auth/device-login', async (req, res) => {
+async function ensureSettingsFresh() {
+  const now = Date.now();
+  if (now - settingsCache.lastLoadedAt > settingsCache.ttlMs) {
     try {
-        const { installationId } = req.body;
-        if (!installationId) return res.status(400).json({ error: 'installationId is required' });
-
-        let user = await User.findOne({ installationId });
-        if (user) {
-            user.lastLogin = new Date();
-            await user.save();
-        } else {
-            user = await new User({ installationId, lastLogin: new Date() }).save();
-        }
-
-        const token = generateToken(user);
-        res.json({ message: 'Login successful', user: transformDoc(user), token });
-    } catch (error) {
-        res.status(500).json({ error: 'Internal server error' });
+      await hydrateSettingsCache();
+    } catch (err) {
+      console.error('Settings cache refresh failed:', err.message);
     }
-});
-
-app.get('/api/auth/me', authenticateToken, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.userId);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    res.json({ user: transformDoc(user) });
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
   }
-});
+}
 
-// =================================================================
-// ADMIN LOGIN ROUTE
-// =================================================================
-app.post('/api/admin/login', async (req, res) => {
+async function getSetting(key, fallback = null) {
+  await ensureSettingsFresh();
+  if (settingsCache.map.has(key)) return settingsCache.map.get(key);
+  const s = await Settings.findOne({ key }).lean();
+  if (s) {
+    settingsCache.map.set(s.key, s.value);
+    return s.value;
+  }
+  return fallback;
+}
+
+function setSettingInCache(key, value) {
+  settingsCache.map.set(key, value);
+  console.log(`📝 Cache updated: ${key} = ${value}`);
+}
+
+function deleteSettingInCache(key) {
+  settingsCache.map.delete(key);
+  console.log(`🗑️ Cache deleted: ${key}`);
+}
+
+// --- Initialize Default Settings ------------------------------------------
+async function initializeDefaultSettings() {
   try {
-    const { username, password } = req.body;
-
-    // --- LOG 1: Log the incoming request ---
-    console.log(`[LOGIN ATTEMPT] Received login request for username: '${username}'`);
-
-    if (!username || !password) {
-      console.log('[LOGIN FAILED] Missing username or password.');
-      return res.status(400).json({ error: 'Username and password are required' });
-    }
-
-    // Find the admin user by username (or email) in the 'admins' collection
-    const admin = await Admin.findOne({ $or: [{ username }, { email: username }], isActive: true });
-
-    // --- LOG 2: Log whether a user was found ---
-    if (admin) {
-        console.log(`[LOGIN ATTEMPT] Found user in database: ${admin.username} (ID: ${admin._id})`);
+    const settingsCount = await Settings.countDocuments();
+    if (settingsCount === 0) {
+      const defaults = [
+        { key: 'app_name', value: 'Town Tv Max', description: 'Application name' },
+        { key: 'app_version', value: '1.0.0', description: 'Current app version' },
+        { key: 'maintenance_mode', value: 'false', description: 'Enable maintenance mode' },
+        { key: 'paywall_enabled', value: 'false', description: 'Enable paywall for streaming' },
+        { key: 'trial_seconds', value: String(60), description: 'Free trial duration in seconds' },
+        {
+          key: 'subscription_packages',
+          value: JSON.stringify([
+            { name: 'Siku 1', price: 800, days: 1 },
+            { name: 'Siku 3', price: 2000, days: 3 },
+            { name: 'Wiki 1', price: 4000, days: 7 },
+            { name: 'Mwezi 1', price: 20000, days: 30 },
+          ]),
+          description: 'Available subscription packages (JSON format)',
+        },
+        { key: 'whatsapp_link', value: 'https://wa.me/255745610606', description: 'Customer support WhatsApp link' },
+      ];
+      await Settings.insertMany(defaults);
+      console.log('Default settings initialized');
     } else {
-        console.log(`[LOGIN FAILED] No active user found for username: '${username}'`);
-        // We still return the same generic error for security
-        return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    // Compare the provided password with the stored hash
-    const isMatch = await bcrypt.compare(password, admin.password);
-
-    // --- LOG 3: Log the password comparison result ---
-    console.log(`[LOGIN ATTEMPT] Password match for '${username}': ${isMatch}`);
-
-    if (!isMatch) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    // If everything is correct, update last login and generate token
-    admin.lastLogin = new Date();
-    await admin.save();
-    
-    console.log(`[LOGIN SUCCESS] User '${username}' logged in successfully.`);
-
-    const token = generateToken(admin, true);
-    res.json({ message: 'Admin login successful', admin: transformDoc(admin), token });
-
-  } catch (error) {
-    // --- LOG 4: Log any unexpected errors ---
-    console.error('[LOGIN ERROR] An unexpected error occurred:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-app.get('/api/admin/me', authenticateAdmin, async (req, res) => {
-  try {
-    const admin = await Admin.findById(req.admin.adminId);
-    if (!admin) return res.status(404).json({ error: 'Admin not found' });
-    res.json({ admin: transformDoc(admin) });
-  } catch (error) {
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// =================================================================
-// ADMIN: DASHBOARD STATS
-// =================================================================
-app.get('/api/admin/dashboard', async (req, res) => {
-  try {
-    const userCount = await User.countDocuments();
-    const channelCount = await Channel.countDocuments();
-    const bannerCount = await HeroBanner.countDocuments();
-    const subscriptionCount = await Subscription.countDocuments();
-    const paymentCount = await Payment.countDocuments();
-
-    res.json({
-      stats: {
-        users: userCount,
-        channels: channelCount,
-        banners: bannerCount,
-        subscriptions: subscriptionCount,
-        payments: paymentCount
+      const whatsappLink = await Settings.findOne({ key: 'whatsapp_link' });
+      if (!whatsappLink) {
+        await Settings.create({
+          key: 'whatsapp_link',
+          value: 'https://wa.me/0715123456',
+          description: 'Customer support WhatsApp link',
+        });
+        console.log('Added missing whatsapp_link setting.');
       }
+    }
+  } catch (error) {
+    console.error('Error initializing default settings:', error);
+  }
+}
+
+initializeDefaultSettings()
+  .then(() => hydrateSettingsCache())
+  .then(count => console.log(`🚀 Settings cache initialized with ${count} keys (ttl=${settingsCache.ttlMs}ms)`))
+  .catch(err => console.error('Initial settings cache hydrate failed:', err.message));
+
+// --- PATCH: REMOVED LEGACY /api/users/log-install ENDPOINT ---
+// This endpoint was based on deviceId and is no longer needed.
+// All user creation is now handled by /api/auth/device-login.
+
+
+// --- CHANNEL ROUTES --------------------------------------------------------
+app.get('/api/channels', async (req, res) => {
+  try {
+    const { category } = req.query;
+    let query = {};
+    
+    if (category && ['sports', 'mziki', 'mengineyo', 'burudani'].includes(category)) {
+      query.category = category;
+    }
+    
+    const channels = await Channel.find(query).sort({ 
+      position: 1,
+      createdAt: -1
+    });
+    
+    res.json({ channels: transformArray(channels) });
+  } catch (error) {
+    console.error('Failed to fetch channels:', error);
+    res.status(500).json({ error: 'Failed to fetch channels' });
+  }
+});
+
+app.get('/api/channels/:id', async (req, res) => {
+  try {
+    const channel = await Channel.findById(req.params.id);
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    res.json({ channel: transformDoc(channel) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch channel' });
+  }
+});
+
+app.post('/api/channels', async (req, res) => {
+  try {
+    const { error } = channelValidationSchema.validate(req.body);
+    if (error) return res.status(400).json({ error: error.details[0].message });
+    const newChannel = new Channel(req.body);
+    await newChannel.save();
+    res.status(201).json({ message: 'Channel created successfully', channel: transformDoc(newChannel) });
+  } catch (error) {
+    if (error.code === 11000) return res.status(400).json({ error: 'Channel ID already exists' });
+    res.status(500).json({ error: 'Failed to create channel' });
+  }
+});
+
+app.put('/api/channels/:id', async (req, res) => {
+  try {
+    const { error } = channelValidationSchema.validate(req.body);
+    if (error) return res.status(400).json({ error: error.details[0].message });
+    const updatedChannel = await Channel.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!updatedChannel) return res.status(404).json({ error: 'Channel not found' });
+    res.json({ message: 'Channel updated successfully', channel: transformDoc(updatedChannel) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update channel' });
+  }
+});
+
+app.delete('/api/channels/:id', async (req, res) => {
+  try {
+    const deletedChannel = await Channel.findByIdAndDelete(req.params.id);
+    if (!deletedChannel) return res.status(404).json({ error: 'Channel not found' });
+    res.json({ message: 'Channel deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete channel' });
+  }
+});
+
+app.post('/api/channels/:id/duplicate', async (req, res) => {
+  try {
+    const originalChannel = await Channel.findById(req.params.id).lean();
+    if (!originalChannel) {
+      return res.status(404).json({ error: 'Original channel not found' });
+    }
+
+    delete originalChannel._id;
+    delete originalChannel.createdAt;
+    delete originalChannel.updatedAt;
+    originalChannel.name = `${originalChannel.name} (Copy)`;
+    originalChannel.channelId = `${originalChannel.channelId}_${Date.now()}`;
+
+    const newChannel = new Channel(originalChannel);
+    await newChannel.save();
+
+    res.status(201).json({
+      message: 'Channel duplicated successfully',
+      channel: transformDoc(newChannel),
     });
   } catch (error) {
-    console.error('Error fetching dashboard stats:', error);
-    res.status(500).json({ error: 'Failed to fetch dashboard stats' });
+    console.error('Duplicate channel error:', error);
+    res.status(500).json({ error: 'Failed to duplicate channel' });
   }
 });
 
-// =================================================================
-// ADMIN: USERS MANAGEMENT
-// =================================================================
-app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
+app.post('/api/channels/:id/toggle', async (req, res) => {
   try {
-    const users = await User.find().sort({ createdAt: -1 });
-    res.json(users);
+    const channel = await Channel.findById(req.params.id);
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    channel.status = !channel.status;
+    await channel.save();
+    res.json({ message: 'Channel status toggled successfully', channel: transformDoc(channel) });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch users' });
+    res.status(500).json({ error: 'Failed to toggle channel status' });
   }
 });
 
-app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
+app.post('/api/channels/batch', async (req, res) => {
   try {
-    await User.findByIdAndDelete(req.params.id);
-    res.json({ message: 'User deleted successfully' });
+    const { ids, action, status } = req.body;
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'Invalid or empty ids array' });
+    }
+
+    let result;
+    if (action === 'delete') {
+      result = await Channel.deleteMany({ _id: { $in: ids } });
+    } else if (action === 'updateStatus' && typeof status === 'boolean') {
+      result = await Channel.updateMany({ _id: { $in: ids } }, { status });
+    } else {
+      return res.status(400).json({ error: 'Invalid action or missing status' });
+    }
+
+    res.json({
+      success: true,
+      message: `Batch ${action} completed successfully`,
+      affected: result.deletedCount || result.modifiedCount || 0,
+    });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to delete user' });
+    res.status(500).json({ error: 'Failed to perform batch operation' });
   }
 });
 
-// =================================================================
-// ADMIN: BANNERS MANAGEMENT
-// =================================================================
-app.get('/api/admin/banners', authenticateAdmin, async (req, res) => {
+// --- ENHANCED SETTINGS ROUTES ---------------------------------------------
+app.get('/api/settings', async (req, res) => {
   try {
-    const banners = await HeroBanner.find().sort({ createdAt: -1 });
-    res.json(banners);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch banners' });
-  }
-});
-
-app.post('/api/admin/banners', authenticateAdmin, async (req, res) => {
-  try {
-    const banner = new HeroBanner(req.body);
-    await banner.save();
-    res.json(banner);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to create banner' });
-  }
-});
-
-app.delete('/api/admin/banners/:id', authenticateAdmin, async (req, res) => {
-  try {
-    await HeroBanner.findByIdAndDelete(req.params.id);
-    res.json({ message: 'Banner deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to delete banner' });
-  }
-});
-
-// =================================================================
-// ADMIN: PAYMENTS MANAGEMENT
-// =================================================================
-app.get('/api/admin/payments', authenticateAdmin, async (req, res) => {
-  try {
-    const payments = await Payment.find().sort({ createdAt: -1 });
-    res.json(payments);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch payments' });
-  }
-});
-
-app.delete('/api/admin/payments/:id', authenticateAdmin, async (req, res) => {
-  try {
-    await Payment.findByIdAndDelete(req.params.id);
-    res.json({ message: 'Payment deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to delete payment' });
-  }
-});
-
-// =================================================================
-// ADMIN: SETTINGS MANAGEMENT
-// =================================================================
-app.get('/api/admin/settings', authenticateAdmin, async (req, res) => {
-  try {
-    const settings = await Setting.findOne();
-    res.json(settings);
+    const settings = await Settings.find({}).sort({ key: 1 });
+    res.json({ settings: transformArray(settings) });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch settings' });
   }
 });
 
-app.post('/api/admin/settings', authenticateAdmin, async (req, res) => {
+app.get('/api/settings/public', async (req, res) => {
   try {
-    let settings = await Setting.findOne();
-    if (!settings) {
-      settings = new Setting(req.body);
-    } else {
-      Object.assign(settings, req.body);
-    }
-    await settings.save();
-    res.json(settings);
+    const settings = await Settings.find({}).sort({ key: 1 });
+    const publicSettings = {};
+    settings.forEach(setting => { publicSettings[setting.key] = setting.value; });
+    res.json(publicSettings);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to save settings' });
+    res.status(500).json({ error: 'Failed to fetch public settings' });
   }
 });
 
-// --- Public Route for Main App to Fetch Banners ---
-app.get('/api/banners', async (req, res) => {
-    try {
-        const banners = await HeroBanner.find({ isActive: true }).sort({ position: 'asc' });
-        res.json({ banners: transformArray(banners) });
-    } catch (error) {
-        res.status(500).json({ error: 'Internal server error fetching banners' });
-    }
-});
-
-
-// --- Public Route for Main App to Fetch Channels ---
-app.get('/api/channels', async (req, res) => {
-    try {
-        const { category } = req.query;
-        const filter = { isActive: true };
-        if (category) {
-            filter.category = category;
-        }
-        const channels = await Channel.find(filter).sort({ position: 'asc', name: 'asc' });
-        res.json({ channels: transformArray(channels) });
-    } catch (error) {
-        res.status(500).json({ error: 'Internal server error fetching channels' });
-    }
-});
-
-
-
-// --- DRM TOKEN ENDPOINT (Crucial for Player) ---
-// --- DRM TOKEN ENDPOINT (Crucial for Player) ---
-app.post('/api/drm/token', authenticateToken, async (req, res) => {
+app.post('/api/settings/refresh-cache', async (req, res) => {
   try {
-    const { channelId } = req.body;
+    const count = await hydrateSettingsCache();
+    res.json({
+      message: 'Cache refreshed successfully',
+      count,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Cache refresh error:', error);
+    res.status(500).json({ error: 'Failed to refresh cache' });
+  }
+});
 
-    if (!channelId) {
-      return res.status(400).json({ error: "channelId is required" });
+app.post('/api/settings', async (req, res) => {
+  try {
+    const { error } = settingsValidationSchema.validate(req.body);
+    if (error) return res.status(400).json({ error: error.details[0].message });
+    const newSetting = new Settings(req.body);
+    await newSetting.save();
+    setSettingInCache(newSetting.key, newSetting.value);
+    res.status(201).json({ message: 'Setting created successfully', setting: transformDoc(newSetting) });
+  } catch (error) {
+    if (error.code === 11000) return res.status(400).json({ error: 'Setting key already exists' });
+    res.status(500).json({ error: 'Failed to create setting' });
+  }
+});
+
+app.put('/api/settings/:id', async (req, res) => {
+  try {
+    const { value, description } = req.body;
+    const updateData = {};
+    if (value !== undefined) updateData.value = value;
+    if (description !== undefined) updateData.description = description;
+
+    const updatedSetting = await Settings.findByIdAndUpdate(req.params.id, updateData, { new: true });
+    if (!updatedSetting) return res.status(404).json({ error: 'Setting not found' });
+
+    if (updatedSetting.key && updatedSetting.value !== undefined) {
+      setSettingInCache(updatedSetting.key, updatedSetting.value);
     }
 
-    const item = await Channel.findOne({ channelId });
+    res.json({ message: 'Setting updated successfully', setting: transformDoc(updatedSetting) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update setting' });
+  }
+});
 
-    if (!item) {
-      return res.status(404).json({ error: 'Item not found' });
+app.delete('/api/settings/:id', async (req, res) => {
+  try {
+    const deletedSetting = await Settings.findByIdAndDelete(req.params.id);
+    if (!deletedSetting) return res.status(404).json({ error: 'Setting not found' });
+    deleteSettingInCache(deletedSetting.key);
+    res.json({ message: 'Setting deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete setting' });
+  }
+});
+
+app.post('/api/settings/paywall/toggle', async (req, res) => {
+  try {
+    console.log('🔄 Paywall toggle requested');
+    let s = await Settings.findOne({ key: 'paywall_enabled' });
+    if (!s) return res.status(404).json({ error: 'paywall_enabled setting not found' });
+
+    const oldValue = s.value;
+    s.value = s.value === 'true' ? 'false' : 'true';
+    await s.save();
+
+    setSettingInCache('paywall_enabled', s.value);
+
+    await hydrateSettingsCache();
+
+    console.log(`✅ Paywall toggled: ${oldValue} → ${s.value}`);
+
+    res.json({
+      key: 'paywall_enabled',
+      value: s.value,
+      previous_value: oldValue,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('❌ Toggle paywall error:', err.message);
+    res.status(500).json({ error: 'Failed to toggle paywall' });
+  }
+});
+
+app.get('/api/test/paywall-status', async (req, res) => {
+  try {
+    const paywallEnabled = await getSetting('paywall_enabled', 'false');
+    const trialSeconds = await getSetting('trial_seconds', '0');
+
+    res.json({
+      paywall_enabled: paywallEnabled,
+      trial_seconds: trialSeconds,
+      cache_size: settingsCache.map.size,
+      cache_last_loaded: new Date(settingsCache.lastLoadedAt).toISOString(),
+      cache_ttl_ms: settingsCache.ttlMs,
+      cache_contents: Object.fromEntries(settingsCache.map)
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- SLIDERS ROUTES --------------------------------------------------------
+app.get('/api/sliders', async (req, res) => {
+  try {
+    const sliders = await Slider.find({}).sort({ order_index: 1, createdAt: -1 });
+    res.json({ sliders: transformArray(sliders) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch sliders' });
+  }
+});
+
+app.get('/api/sliders/public', async (req, res) => {
+  try {
+    const query = { is_active: true };
+    if (req.query.type) {
+      query.type = req.query.type;
+    }
+
+    const sliders = await Slider.find(query).sort({ order_index: 1, createdAt: -1 });
+    res.json({ sliders: transformArray(sliders) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch public sliders' });
+  }
+});
+
+app.post('/api/sliders', async (req, res) => {
+  try {
+    const { error } = sliderValidationSchema.validate(req.body);
+    if (error) return res.status(400).json({ error: error.details[0].message });
+
+    if (!req.body.order_index) {
+      const maxOrder = await Slider.findOne({}).sort({ order_index: -1 });
+      req.body.order_index = (maxOrder?.order_index || 0) + 1;
+    }
+
+    const newSlider = new Slider(req.body);
+    await newSlider.save();
+    res.status(201).json({ message: 'Slider created successfully', slider: transformDoc(newSlider) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create slider' });
+  }
+});
+
+app.put('/api/sliders/:id', async (req, res) => {
+  try {
+    const { error } = sliderValidationSchema.validate(req.body);
+    if (error) return res.status(400).json({ error: error.details[0].message });
+
+    const updatedSlider = await Slider.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!updatedSlider) return res.status(404).json({ error: 'Slider not found' });
+
+    res.json({ message: 'Slider updated successfully', slider: transformDoc(updatedSlider) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update slider' });
+  }
+});
+
+app.delete('/api/sliders/:id', async (req, res) => {
+  try {
+    const deletedSlider = await Slider.findByIdAndDelete(req.params.id);
+    if (!deletedSlider) return res.status(404).json({ error: 'Slider not found' });
+    res.json({ message: 'Slider deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete slider' });
+  }
+});
+
+app.post('/api/sliders/:id/toggle', async (req, res) => {
+  try {
+    const slider = await Slider.findById(req.params.id);
+    if (!slider) return res.status(404).json({ error: 'Slider not found' });
+
+    slider.is_active = !slider.is_active;
+    await slider.save();
+
+    res.json({ message: 'Slider status toggled successfully', slider: transformDoc(slider) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to toggle slider status' });
+  }
+});
+
+// --- NOTIFICATIONS ROUTES --------------------------------------------------
+app.get('/api/notifications', async (req, res) => {
+  try {
+    const notifications = await Notification.find({}).sort({ createdAt: -1 });
+    res.json({ notifications: transformArray(notifications) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch notifications' });
+  }
+});
+
+app.delete('/api/notifications/:id', async (req, res) => {
+  try {
+    const deletedNotification = await Notification.findByIdAndDelete(req.params.id);
+    if (!deletedNotification) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+    res.json({ message: 'Notification deleted successfully' });
+  } catch (error) {
+    console.error('Delete notification error:', error);
+    res.status(500).json({ error: 'Failed to delete notification' });
+  }
+});
+
+app.post('/api/notifications', async (req, res) => {
+  try {
+    const { error } = notificationValidationSchema.validate(req.body);
+    if (error) return res.status(400).json({ error: error.details[0].message });
+
+    const newNotification = new Notification(req.body);
+    if (req.body.scheduled_at) newNotification.status = 'scheduled';
+
+    await newNotification.save();
+    res.status(201).json({ message: 'Notification created successfully', notification: transformDoc(newNotification) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create notification' });
+  }
+});
+
+app.put('/api/notifications/:id', async (req, res) => {
+  try {
+    const { error } = notificationValidationSchema.validate(req.body);
+    if (error) return res.status(400).json({ error: error.details[0].message });
+
+    const updatedNotification = await Notification.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!updatedNotification) return res.status(404).json({ error: 'Notification not found' });
+
+    res.json({ message: 'Notification updated successfully', notification: transformDoc(updatedNotification) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update notification' });
+  }
+});
+
+app.delete('/api/notifications/:id', async (req, res) => {
+  try {
+    const deletedNotification = await Notification.findByIdAndDelete(req.params.id);
+    if (!deletedNotification) return res.status(404).json({ error: 'Notification not found' });
+    res.json({ message: 'Notification deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete notification' });
+  }
+});
+
+app.post('/api/notifications/:id/send', async (req, res) => {
+  try {
+    const notification = await Notification.findById(req.params.id);
+    if (!notification) return res.status(404).json({ error: 'Notification not found' });
+
+    let targetCount = 0;
+    const totalUsers = await User.countDocuments();
+
+    if (notification.target_audience === 'all') {
+      targetCount = totalUsers;
+    } else if (notification.target_audience === 'paid') {
+      targetCount = await User.countDocuments({ is_premium: true });
+    } else if (notification.target_audience === 'free') {
+      targetCount = await User.countDocuments({ is_premium: false });
+    }
+
+    notification.status = 'sent';
+    notification.sent_at = new Date();
+    notification.sent_count = targetCount;
+    await notification.save();
+
+    res.json({ message: 'Notification sent successfully', notification: transformDoc(notification), sent_to: targetCount });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to send notification' });
+  }
+});
+
+// --- STATS ROUTES ----------------------------------------------------------
+app.get('/api/stats', async (req, res) => {
+  try {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const startOfMonth = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    const totalUsers = await User.countDocuments();
+    const paidUsers = await User.countDocuments({ is_premium: true });
+    const freeUsers = totalUsers - paidUsers;
+    const totalChannels = await Channel.countDocuments();
+    const activeChannels = await Channel.countDocuments({ status: true });
+
+    const newUsersToday = await User.countDocuments({ createdAt: { $gte: startOfToday } });
+    const newUsersThisWeek = await User.countDocuments({ createdAt: { $gte: startOfWeek } });
+    const newUsersThisMonth = await User.countDocuments({ createdAt: { $gte: startOfMonth } });
+
+    const activeUsers = Math.floor(totalUsers * 0.3);
+
+    const subscriptionPrice = 9.99;
+    const revenue = {
+      today: paidUsers * subscriptionPrice * 0.1,
+      thisWeek: paidUsers * subscriptionPrice * 0.7,
+      thisMonth: paidUsers * subscriptionPrice * 3.0,
+      total: paidUsers * subscriptionPrice * 12.0,
+    };
+
+    const channels = await Channel.find({ status: true }).limit(5);
+    const topChannels = channels.map((channel, index) => ({
+      id: channel._id.toString(),
+      name: channel.name,
+      viewCount: Math.max(1000 - index * 200, 100),
+      uniqueViewers: Math.max(500 - index * 100, 50),
+    }));
+
+    const userGrowth = [];
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+      userGrowth.push({
+        date: date.toISOString().split('T')[0],
+        totalUsers: Math.max(totalUsers - i * 10, 0),
+        paidUsers: Math.max(paidUsers - i * 2, 0),
+      });
+    }
+
+    res.json({
+      totalUsers, paidUsers, freeUsers, activeUsers, newUsersToday, newUsersThisWeek,
+      newUsersThisMonth, totalChannels, activeChannels, revenue, topChannels, userGrowth,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch stats' });
+  }
+});
+
+app.get('/api/stats/dashboard', async (req, res) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    const paidUsers = await User.countDocuments({ is_premium: true });
+    const totalChannels = await Channel.countDocuments();
+    const activeChannels = await Channel.countDocuments({ status: true });
+
+    res.json({ totalUsers, paidUsers, totalChannels, activeChannels });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch dashboard stats' });
+  }
+});
+
+// --- Enhanced Paywall Middleware (uses settings cache) --------------------
+async function enforcePaywall(req, res, next) {
+  try {
+    const paywallEnabledStr = await getSetting('paywall_enabled', 'false');
+    const trialSecondsStr = await getSetting('trial_seconds', '0');
+
+    const paywallEnabled = paywallEnabledStr === 'true';
+    const trialSeconds = parseInt(trialSecondsStr || '0', 10);
+
+    console.log(`🔒 Paywall check: enabled=${paywallEnabled}, trial=${trialSeconds}s`);
+
+    if (!paywallEnabled) {
+      console.log('✅ Paywall disabled - allowing access');
+      return next();
+    }
+
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      console.log('❌ No token provided');
+      return res.status(401).json({ error: 'Paywall enabled. Please log in.' });
+    }
+
+    let payload;
+    try {
+      payload = jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret');
+    } catch {
+      console.log('❌ Invalid token');
+      return res.status(401).json({ error: 'Invalid token.' });
+    }
+
+    const userId = payload.user?.id;
+    const user = await User.findById(userId);
+    if (!user) {
+      console.log('❌ User not found');
+      return res.status(401).json({ error: 'User not found.' });
+    }
+
+    if (user.is_premium && user.subscriptionEndDate > Date.now()) {
+      console.log('✅ Premium user - allowing access');
+      return next();
+    }
+
+    if (trialSeconds > 0) {
+      const accountAgeSeconds = (Date.now() - user.createdAt.getTime()) / 1000;
+      if (accountAgeSeconds <= trialSeconds) {
+        console.log(`✅ Trial user - allowing access (${Math.ceil(trialSeconds - accountAgeSeconds)}s remaining)`);
+        return next();
+      }
+    }
+
+    console.log('❌ Paywall blocking access');
+    return res.status(403).json({ error: 'Paywall active. Please subscribe.' });
+  } catch (err) {
+    console.error('Paywall enforcement error:', err);
+    res.status(500).json({ error: 'Paywall check failed.' });
+  }
+}
+
+// --- PUBLIC ROUTES (paywall-protected where relevant) ----------------------
+app.get('/api/public/channels', enforcePaywall, async (req, res) => {
+  try {
+    const { category } = req.query;
+    let query = { status: true };
+    
+    if (category && ['sports', 'mziki', 'mengineyo', 'burudani'].includes(category)) {
+      query.category = category;
     }
     
-    res.json({ success: true, data: transformDoc(item) });
-
+    const channels = await Channel.find(query).sort({ 
+      position: 1,
+      createdAt: -1
+    });
+    
+    res.json({ channels: transformArray(channels) });
   } catch (error) {
-    console.error("❌ ERROR in /api/drm/token:", error);
-    return res.status(500).json({ error: "Internal server error." });
+    console.error('Failed to fetch public channels:', error);
+    res.status(500).json({ error: 'Failed to fetch public channels' });
   }
 });
 
-
-// --- Admin Routes for managing content, users, etc. ---
-// These are cloned directly from your working file for completeness.
-// They include CRUD for channels, content, banners, users, payments.
-
-app.get('/api/admin/channels', authenticateAdmin, async (req, res) => {
-    // Admin route to get all channels (including inactive)
-    const channels = await Channel.find().sort({ position: 'asc' });
-    res.json({ channels: transformArray(channels) });
-});
-
-app.post('/api/admin/channels', authenticateAdmin, async (req, res) => {
-    const newChannel = new Channel(req.body);
-    await newChannel.save();
-    res.status(201).json({ channel: transformDoc(newChannel) });
-});
-
-app.put('/api/admin/channels/:id', authenticateAdmin, async (req, res) => {
-    const channel = await Channel.findByIdAndUpdate(req.params.id, req.body, { new: true });
+app.get('/api/public/channels/:channelId', enforcePaywall, async (req, res) => {
+  try {
+    const channel = await Channel.findOne({ 
+      channelId: req.params.channelId, 
+      status: true 
+    });
     if (!channel) return res.status(404).json({ error: 'Channel not found' });
     res.json({ channel: transformDoc(channel) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch channel' });
+  }
 });
 
-app.delete('/api/admin/channels/:id', authenticateAdmin, async (req, res) => {
-    await Channel.findByIdAndDelete(req.params.id);
-    res.json({ message: 'Channel deleted' });
+app.get('/api/public/packages', async (req, res) => {
+  try {
+    const raw = await getSetting('subscription_packages');
+    if (!raw) return res.status(404).json({ error: 'Subscription packages not configured.' });
+    try {
+      res.json(JSON.parse(raw));
+    } catch {
+      res.status(500).json({ error: 'Failed to parse subscription packages.' });
+    }
+  } catch (error) {
+    console.error('Failed to fetch packages:', error);
+    res.status(500).json({ error: 'Failed to fetch subscription packages.' });
+  }
 });
 
-// And so on for all other admin routes...
-
-
-// --- Error Handling & Server Start -----------------------------------------
-app.use((req, res) => {
-  res.status(404).json({ error: 'Endpoint not found' });
+app.get('/api/public/notifications', async (req, res) => {
+  try {
+    const notifications = await Notification.find({ status: 'sent' }).sort({ sent_at: -1 });
+    res.json({ notifications: transformArray(notifications) });
+  } catch (error) {
+    console.error('Failed to fetch public notifications:', error);
+    res.status(500).json({ error: 'Failed to fetch public notifications.' });
+  }
 });
 
-app.use((error, req, res, next) => {
-  console.error('Unhandled error:', error);
-  res.status(500).json({ error: 'Internal server error' });
+// --- SUBSCRIBE & PAYMENT ---------------------------------------------------
+app.post('/api/subscribe/initiate-payment', async (req, res) => {
+  try {
+    // --- PATCH: installationId is now the most critical piece of data ---
+    const { name, phoneNumber, package: packageTitle, installationId } = req.body;
+    
+    // Ensure the client has sent the installationId
+    if (!name || !phoneNumber || !packageTitle || !installationId) {
+      return res.status(400).json({ error: 'Name, phone number, package, and installationId are required.' });
+    }
+
+    const packSettingRaw = await getSetting('subscription_packages');
+    if (!packSettingRaw) return res.status(500).json({ error: 'Subscription packages not configured on server.' });
+
+    let packages = {};
+    try {
+      const parsed = JSON.parse(packSettingRaw);
+      parsed.forEach(p => { packages[p.name.toLowerCase()] = { price: p.price, days: p.days }; });
+    } catch (err) {
+      return res.status(500).json({ error: 'Failed to parse subscription packages on server.' });
+    }
+
+    const selectedPackage = packages[packageTitle?.toLowerCase()];
+    if (!selectedPackage) {
+        console.error(`Invalid package selected: ${packageTitle}. Available:`, Object.keys(packages));
+        return res.status(400).json({ error: 'Invalid package selected' });
+    }
+
+    const amount = Number(selectedPackage.price);
+    const orderId = uuidv4();
+
+    const tx = new Transaction({
+      orderId,
+      phoneNumber,
+      name,
+      packageTitle,
+      price: amount,
+      status: 'PENDING',
+      installationId: installationId, // This is the crucial link to the user
+      // deviceId is no longer needed to find the user
+    });
+    await tx.save();
+
+    res.status(200).json({ orderId, message: 'Request received. Start polling.' });
+
+    const backendURL = process.env.BACKEND_URL || `https://towntvmax.onrender.com`;
+    const zenoPayload = {
+      order_id: orderId,
+      buyer_name: name,
+      buyer_phone: formatPhone(phoneNumber),
+      buyer_email: 'noemail@burudani.app',
+      amount: amount,
+      webhook_url: `${backendURL}/api/webhooks/zenopay`,
+    };
+
+    setImmediate(async () => {
+      try {
+        const url = process.env.ZENOPAY_API_URL;
+        const apiKey = process.env.ZENOPAY_API_KEY;
+        if (!url || !apiKey) {
+          console.error('ZENOPAY credentials missing');
+          await Transaction.updateOne({ orderId }, { status: 'FAILED' }).exec();
+          return;
+        }
+
+        const zRes = await axios.post(url, zenoPayload, {
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+          timeout: 15_000,
+          validateStatus: () => true,
+        });
+
+        if (zRes.status >= 200 && zRes.status < 300) {
+          console.log('✅ Payment gateway request acknowledged:', zRes.data);
+        } else {
+          console.error('❌ Zenopay non-2xx:', zRes.status, zRes.data);
+          await Transaction.updateOne({ orderId }, { status: 'FAILED' }).exec();
+        }
+      } catch (apiErr) {
+        const msg = apiErr?.response?.data || apiErr.message;
+        console.error('❌ Payment gateway API call failed:', msg);
+        try { await Transaction.updateOne({ orderId }, { status: 'FAILED' }).exec(); } catch {}
+      }
+    });
+  } catch (error) {
+    console.error('Payment initiation error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to initiate payment.' });
+    }
+  }
+});
+
+// --- PATCH START: Webhook now ONLY uses installationId ---
+app.post('/api/webhooks/zenopay', async (req, res) => {
+  try {
+    const { order_id, payment_status } = req.body || {};
+    console.log(`[ZenoPay] Webhook received: order_id=${order_id}, status=${payment_status}`);
+
+    const tx = await Transaction.findOne({ orderId: order_id });
+    if (!tx) {
+      console.log(`Webhook ignored: Transaction with orderId ${order_id} not found.`);
+      return res.status(200).send('Ignored: Transaction not found');
+    }
+
+    if (payment_status === 'COMPLETED') {
+      let durationDays = 30;
+      try {
+        const packRaw = await getSetting('subscription_packages');
+        if (packRaw) {
+          const packages = JSON.parse(packRaw);
+          const matched = packages.find(
+            (p) => p.name.toLowerCase() === tx.packageTitle.toLowerCase()
+          );
+          if (matched && matched.days) {
+            durationDays = matched.days;
+          }
+        }
+      } catch (e) {
+        console.error("Could not parse subscription packages for duration.", e);
+      }
+
+      const now = new Date();
+      
+      // Find the user ONLY by the installationId from the transaction.
+      // All fallback logic has been removed.
+      const existingUser = tx.installationId 
+        ? await User.findOne({ installationId: tx.installationId }) 
+        : null;
+
+      if (existingUser) {
+        console.log(`Found user by installationId: ${tx.installationId}`);
+      }
+      
+      let userToSign;
+
+      if (existingUser) {
+        console.log(`Upgrading existing user: ${existingUser.id}`);
+        const baseDate =
+          existingUser.subscriptionEndDate && existingUser.subscriptionEndDate > now
+            ? existingUser.subscriptionEndDate
+            : now;
+        const newEndDate = new Date(baseDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
+
+        existingUser.is_premium = true;
+        existingUser.subscriptionEndDate = newEndDate;
+        if (tx.name) existingUser.name = tx.name;
+        
+        // This logic remains to prevent a crash if a new user tries to pay
+        // with a phone number that's already linked to a different account.
+        let shouldUpdatePhoneNumber = !existingUser.phoneNumber && tx.phoneNumber;
+        if (shouldUpdatePhoneNumber) {
+            const phoneOwner = await User.findOne({ phoneNumber: tx.phoneNumber });
+            if (phoneOwner && phoneOwner.id !== existingUser.id) {
+                console.warn(`Phone number ${tx.phoneNumber} is already linked to user ${phoneOwner.id}. Upgrading user ${existingUser.id} without changing phone number.`);
+                shouldUpdatePhoneNumber = false;
+            }
+        }
+        if (shouldUpdatePhoneNumber) {
+            existingUser.phoneNumber = tx.phoneNumber;
+        }
+        
+        await existingUser.save();
+        console.log(`[ZenoPay] Extended user ${existingUser.id} until ${existingUser.subscriptionEndDate?.toISOString?.()}`);
+
+        userToSign = existingUser;
+      } else {
+        // This block now only runs if the installationId from the payment
+        // does not match any user in the database. This implies a new user.
+        console.log(`Creating new premium user for installationId ${tx.installationId}`);
+        const newEndDate = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
+        
+        const newUser = await User.create({
+          name: tx.name || 'New User',
+          phoneNumber: tx.phoneNumber,
+          installationId: tx.installationId,
+          is_premium: true,
+          subscriptionEndDate: newEndDate,
+        });
+        userToSign = newUser;
+        console.log(`[ZenoPay] Created premium user ${userToSign.id} (installationId=${tx.installationId})`);
+      }
+
+      const token = jwt.sign(
+        { user: { id: userToSign.id } },
+        process.env.JWT_SECRET || 'your_jwt_secret',
+        { expiresIn: `${durationDays}d` }
+      );
+
+      tx.status = 'COMPLETED';
+      tx.token = token;
+      await tx.save();
+      console.log(`✅ Successfully processed COMPLETED webhook for orderId ${order_id}`);
+
+    } else if (['FAILED', 'CANCELLED', 'EXPIRED'].includes(payment_status)) {
+        tx.status = payment_status;
+        await tx.save();
+        console.log(`☑️ Successfully processed ${payment_status} webhook for orderId ${order_id}`);
+    }
+
+    res.status(200).send('Webhook processed');
+  } catch (err) {
+    console.error("Error processing webhook", err);
+    res.status(500).send("Error processing webhook");
+  }
+});
+// --- PATCH END ---
+
+
+app.get('/api/subscribe/status/:orderId', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const tx = await Transaction.findOne({ orderId });
+    if (!tx) return res.status(404).json({ status: 'NOT_FOUND' });
+
+    if (tx.status === 'COMPLETED') {
+      // --- PATCH START: Status check now ONLY uses installationId ---
+      // Find user exclusively by the installationId stored in the transaction.
+      const user = tx.installationId 
+        ? await User.findOne({ installationId: tx.installationId }) 
+        : null;
+      // --- PATCH END ---
+
+      return res.json({ status: 'COMPLETED', token: tx.token, user: transformDoc(user) });
+    }
+    
+    return res.json({ status: tx.status });
+  } catch(err) {
+    console.error('Subscription status error:', err);
+    res.status(500).json({ error: 'Failed to get subscription status.' });
+  }
+});
+
+app.post('/api/subscribe/mock-complete/:orderId', async (req, res) => {
+  if (process.env.ALLOW_MOCK_PAY !== 'true') {
+    return res.status(403).json({ error: 'Mocking is disabled' });
+  }
+
+  try {
+    const { orderId } = req.params;
+    const tx = await Transaction.findOne({ orderId });
+    if (!tx) {
+      return res.status(404).json({ error: 'Transaction not found' });
+    }
+
+    const webhookPayload = {
+      order_id: orderId,
+      payment_status: 'COMPLETED',
+      buyer_phone: tx.phoneNumber
+    };
+
+    req.url = '/api/webhooks/zenopay';
+    req.method = 'POST';
+    req.body = webhookPayload;
+
+    app._router.handle(req, res, () => {});
+
+  } catch (e) {
+    console.error('Mock completion error:', e.message);
+    if (!res.headersSent) {
+       res.status(500).json({ error: 'Failed to mock-complete payment' });
+    }
+  }
+});
+
+// --- Health & Server Start -------------------------------------------------
+app.get('/health', (req, res) => res.json({ ok: true, app: 'Town Tv Max' }));
+
+app.get('/', async (req, res) => {
+  try {
+    const notifications = await Notification.find({ status: 'sent' }).sort({ sent_at: -1 }).limit(10);
+    res.json({
+      message: 'Town Tv Max Backend API',
+      notifications: transformArray(notifications),
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.json({
+      message: 'Town Tv Max Backend API',
+      notifications: [],
+      error: 'Failed to fetch notifications'
+    });
+  }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀  Town TV Backend server running on port ${PORT}`);
+  console.log(`🚀 Town Tv Max Backend server running on port ${PORT}`);
 });
 
 module.exports = app;
 
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+
+app.post('/api/auth/device-login', async (req, res) => {
+  try {
+    const { installationId, deviceId } = req.body;
+
+    if (!installationId) {
+      return res.status(400).json({ error: 'installationId is required' });
+    }
+
+    let user = await User.findOne({ installationId });
+
+    if (user) {
+      // User exists, update last login and deviceId (for analytics)
+      user.deviceId = deviceId; 
+      user.last_login = new Date();
+      await user.save();
+    } else {
+      // This is a new installation, create a new user.
+      user = new User({
+        installationId,
+        deviceId, // Stored for info, not for auth
+        last_login: new Date(),
+        is_premium: false
+      });
+      await user.save();
+    }
+
+    const durationDays = 365;
+    const token = jwt.sign(
+      { user: { id: user.id } },
+      JWT_SECRET,
+      { expiresIn: `${durationDays}d` }
+    );
+
+    res.json({
+      message: 'Login successful',
+      user: transformDoc(user),
+      token
+    });
+
+  } catch (error) {
+    console.error('Unified device login error:', error);
+    if (error.code === 11000) {
+      // This will now only trigger if two requests try to create a user with the same
+      // installationId at the exact same time. Highly unlikely, but good to handle.
+      return res.status(500).json({ error: 'Duplicate key error. Please try again.' });
+    }
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+function authMiddleware(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Authorization token required' });
+    }
+
+    const token = authHeader.substring(7);
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    console.error('Auth middleware error:', error);
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
+// --- USER MANAGEMENT ROUTES -----------------------------------------------
+app.get('/api/users', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const status = req.query.status;
+    const search = req.query.search || '';
+
+    const filter = {};
+
+    if (status === 'paid') {
+      filter.is_premium = true;
+    } else if (status === 'free') {
+      filter.is_premium = false;
+    }
+
+    if (search) {
+      // Search remains flexible for admin purposes
+      filter.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { phoneNumber: { $regex: search, $options: 'i' } },
+        { deviceId: { $regex: search, $options: 'i' } },
+        { installationId: { $regex: search, $options: 'i' } },
+      ];
+    }
+
+    const skip = (page - 1) * limit;
+
+    const users = await User.find(filter)
+      .select('-password')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const total = await User.countDocuments(filter);
+
+    const response = {
+      users: transformArray(users),
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    };
+
+    res.json(response);
+  } catch (error) {
+    console.error('Get users error:', error);
+    res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+app.get('/api/users/:id', async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id).select('-password');
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ user: transformDoc(user) });
+  } catch (error) {
+    console.error('Get user error:', error);
+    res.status(500).json({ error: 'Failed to fetch user' });
+  }
+});
+
+const manualUpgradeValidation = Joi.object({
+  days: Joi.number().integer().min(1).required(),
+});
+
+app.post('/api/users/:id/upgrade-premium', async (req, res) => {
+  try {
+    const { error } = manualUpgradeValidation.validate(req.body);
+    if (error) {
+      return res.status(400).json({ error: error.details[0].message });
+    }
+    
+    const { days } = req.body;
+    const user = await User.findById(req.params.id);
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const now = new Date();
+    const baseDate = user.subscriptionEndDate && user.subscriptionEndDate > now
+      ? user.subscriptionEndDate
+      : now;
+
+    const newEndDate = new Date(baseDate.getTime() + days * 24 * 60 * 60 * 1000);
+
+    user.is_premium = true;
+    user.subscriptionEndDate = newEndDate;
+    
+    await user.save();
+
+    console.log(`MANUAL UPGRADE: User ${user.id} upgraded for ${days} days. New expiry: ${newEndDate.toISOString()}`);
+
+    const token = jwt.sign(
+      { user: { id: user.id } },
+      process.env.JWT_SECRET || 'your_jwt_secret',
+      { expiresIn: `${days}d` } 
+    );
+
+    res.json({ 
+      message: 'User upgraded successfully', 
+      user: transformDoc(user),
+      token: token,
+    });
+
+  } catch (error) {
+    console.error('Manual upgrade error:', error);
+    res.status(500).json({ error: 'Failed to upgrade user' });
+  }
+});
+
+
+app.put('/api/users/:id', async (req, res) => {
+  try {
+    const { name, phoneNumber, is_premium, subscriptionEndDate } = req.body;
+
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (phoneNumber !== undefined) updateData.phoneNumber = phoneNumber;
+    if (is_premium !== undefined) updateData.is_premium = is_premium;
+    if (subscriptionEndDate !== undefined) updateData.subscriptionEndDate = subscriptionEndDate;
+
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true }
+    ).select('-password');
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ user: transformDoc(user) });
+  } catch (error) {
+    console.error('Update user error:', error);
+    res.status(500).json({ error: 'Failed to update user' });
+  }
+});
+
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    const user = await User.findByIdAndDelete(req.params.id);
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ message: 'User deleted successfully' });
+  } catch (error) {
+    console.error('Delete user error:', error);
+    res.status(500).json({ error: 'Failed to delete user' });
+  }
+});
+
+app.get('/api/auth/me', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.user.id).select('-password');
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ user: transformDoc(user) });
+  } catch (error) {
+    console.error('Get profile error:', error);
+    res.status(500).json({ error: 'Failed to fetch user profile' });
+  }
+});
