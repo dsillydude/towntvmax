@@ -131,26 +131,6 @@ const ChannelSchema = new mongoose.Schema({
 });
 const Channel = mongoose.model('Channel', ChannelSchema);
 
-const ContentSchema = new mongoose.Schema({
-  id: { type: String, default: uuidv4, unique: true },
-  title: { type: String, required: true },
-  description: { type: String },
-  type: { type: String, enum: ['movie', 'series', 'episode'], required: true },
-  category: { type: String, required: true },
-  streamUrl: { type: String, required: true },
-  drmEnabled: { type: Boolean, default: false },
-  drmKeyId: { type: String },
-  drmKey: { type: String },
-  thumbnailUrl: { type: String },
-  posterUrl: { type: String },
-  duration: { type: Number },
-  releaseYear: { type: Number },
-  rating: { type: Number, min: 0, max: 10 },
-  isPremium: { type: Boolean, default: false },
-  isActive: { type: Boolean, default: true },
-  createdAt: { type: Date, default: Date.now }
-});
-const Content = mongoose.model('Content', ContentSchema);
 
 const HeroBannerSchema = new mongoose.Schema({
   id: { type: String, default: uuidv4, unique: true },
@@ -180,6 +160,16 @@ const PaymentSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 const Payment = mongoose.model('Payment', PaymentSchema);
+
+// ADDED: Subscription model for dashboard stats
+const SubscriptionSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    plan: { type: String },
+    startDate: { type: Date },
+    endDate: { type: Date },
+}, { timestamps: true });
+const Subscription = mongoose.model('Subscription', SubscriptionSchema);
+
 
 // --- Helper Functions ------------------------------------------------------
 function transformDoc(doc) {
@@ -364,7 +354,7 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
 });
 
 // =================================================================
-// PATCHED ADMIN LOGIN ROUTE WITH LOGGING
+// ADMIN LOGIN ROUTE
 // =================================================================
 app.post('/api/admin/login', async (req, res) => {
   try {
@@ -426,8 +416,131 @@ app.get('/api/admin/me', authenticateAdmin, async (req, res) => {
   }
 });
 
-// All other routes from the working file are included below...
-// (User management, Subscription management, Banners, Channels, Content, Payments, etc.)
+// =================================================================
+// ADMIN: DASHBOARD STATS
+// =================================================================
+app.get('/api/admin/dashboard', authenticateAdmin, async (req, res) => {
+  try {
+    const userCount = await User.countDocuments();
+    const channelCount = await Channel.countDocuments();
+    const bannerCount = await HeroBanner.countDocuments();
+    const subscriptionCount = await Subscription.countDocuments();
+    const paymentCount = await Payment.countDocuments();
+
+    res.json({
+      stats: {
+        users: userCount,
+        channels: channelCount,
+        banners: bannerCount,
+        subscriptions: subscriptionCount,
+        payments: paymentCount
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching dashboard stats:', error);
+    res.status(500).json({ error: 'Failed to fetch dashboard stats' });
+  }
+});
+
+// =================================================================
+// ADMIN: USERS MANAGEMENT
+// =================================================================
+app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
+  try {
+    const users = await User.find().sort({ createdAt: -1 });
+    res.json(users);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
+  try {
+    await User.findByIdAndDelete(req.params.id);
+    res.json({ message: 'User deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete user' });
+  }
+});
+
+// =================================================================
+// ADMIN: BANNERS MANAGEMENT
+// =================================================================
+app.get('/api/admin/banners', authenticateAdmin, async (req, res) => {
+  try {
+    const banners = await HeroBanner.find().sort({ createdAt: -1 });
+    res.json(banners);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch banners' });
+  }
+});
+
+app.post('/api/admin/banners', authenticateAdmin, async (req, res) => {
+  try {
+    const banner = new HeroBanner(req.body);
+    await banner.save();
+    res.json(banner);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create banner' });
+  }
+});
+
+app.delete('/api/admin/banners/:id', authenticateAdmin, async (req, res) => {
+  try {
+    await HeroBanner.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Banner deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete banner' });
+  }
+});
+
+// =================================================================
+// ADMIN: PAYMENTS MANAGEMENT
+// =================================================================
+app.get('/api/admin/payments', authenticateAdmin, async (req, res) => {
+  try {
+    const payments = await Payment.find().sort({ createdAt: -1 });
+    res.json(payments);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch payments' });
+  }
+});
+
+app.delete('/api/admin/payments/:id', authenticateAdmin, async (req, res) => {
+  try {
+    await Payment.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Payment deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete payment' });
+  }
+});
+
+// =================================================================
+// ADMIN: SETTINGS MANAGEMENT
+// =================================================================
+app.get('/api/admin/settings', authenticateAdmin, async (req, res) => {
+  try {
+    const settings = await Setting.findOne();
+    res.json(settings);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch settings' });
+  }
+});
+
+app.post('/api/admin/settings', authenticateAdmin, async (req, res) => {
+  try {
+    let settings = await Setting.findOne();
+    if (!settings) {
+      settings = new Setting(req.body);
+    } else {
+      Object.assign(settings, req.body);
+    }
+    await settings.save();
+    res.json(settings);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to save settings' });
+  }
+});
 
 // --- Public Route for Main App to Fetch Banners ---
 app.get('/api/banners', async (req, res) => {
@@ -455,48 +568,24 @@ app.get('/api/channels', async (req, res) => {
     }
 });
 
-// --- Public Route for Main App to Fetch Content ---
-app.get('/api/content', async (req, res) => {
-    try {
-        const { category } = req.query;
-        const filter = { isActive: true };
-        if (category) {
-            filter.category = category;
-        }
-        const content = await Content.find(filter).sort({ createdAt: 'desc' });
-        res.json({ content: transformArray(content) });
-    } catch (error) {
-        res.status(500).json({ error: 'Internal server error fetching content' });
-    }
-});
 
 
 // --- DRM TOKEN ENDPOINT (Crucial for Player) ---
+// --- DRM TOKEN ENDPOINT (Crucial for Player) ---
 app.post('/api/drm/token', authenticateToken, async (req, res) => {
-  console.log("\n--- Request at /api/drm/token ---");
   try {
-    const { channelId, contentId } = req.body;
-    console.log(`1. Request body:`, req.body);
+    const { channelId } = req.body;
 
-    if (!channelId && !contentId) {
-      return res.status(400).json({ error: "channelId or contentId is required" });
+    if (!channelId) {
+      return res.status(400).json({ error: "channelId is required" });
     }
 
-    let item;
-    if (channelId) {
-        item = await Channel.findOne({ channelId });
-    } else {
-        item = await Content.findById(contentId);
-    }
+    const item = await Channel.findOne({ channelId });
 
     if (!item) {
       return res.status(404).json({ error: 'Item not found' });
     }
     
-    console.log("2. Found item:", item.name || item.title);
-
-    // This endpoint just returns the stored data.
-    // The client-side service will format the DRM key.
     res.json({ success: true, data: transformDoc(item) });
 
   } catch (error) {
@@ -552,3 +641,4 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 module.exports = app;
+
