@@ -862,17 +862,15 @@ async function enforcePaywall(req, res, next) {
 // --- PUBLIC ROUTES (paywall-protected where relevant) ----------------------
 app.get('/api/public/channels', enforcePaywall, async (req, res) => {
   try {
-    const { category, mainCategory, subCategory } = req.query; // Keep `category` for backward compatibility if needed.
+    // Only look for the new category fields
+    const { mainCategory, subCategory } = req.query; 
     let query = { status: true };
     
-    // New logic
-    if (mainCategory) query.mainCategory = mainCategory;
-    if (subCategory) query.subCategory = subCategory;
-
-    // Old logic (can be removed if clients are updated)
-    if (category && ['sports', 'mziki', 'mengineyo', 'burudani'].includes(category)) {
-      // A simple mapping could be done here if necessary, e.g.
-      // if (category === 'sports') query.mainCategory = 'Sports';
+    if (mainCategory) {
+      query.mainCategory = mainCategory;
+    }
+    if (subCategory) {
+      query.subCategory = subCategory;
     }
     
     const channels = await Channel.find(query).sort({ 
