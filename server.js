@@ -1299,12 +1299,15 @@ app.get('/api/users', async (req, res) => {
     }
 
     if (search) {
-      // Search remains flexible for admin purposes
+      // FIX: Create a regular expression for a case-insensitive partial match.
+      // This will find any user where the name, phone, etc., "contains" the search text.
+      const searchRegex = new RegExp(search, 'i');
+
       filter.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { phoneNumber: { $regex: search, $options: 'i' } },
-        { deviceId: { $regex: search, $options: 'i' } },
-        { installationId: { $regex: search, $options: 'i' } },
+        { name: { $regex: searchRegex } },
+        { phoneNumber: { $regex: searchRegex } },
+        { deviceId: { $regex: searchRegex } },
+        { installationId: { $regex: searchRegex } },
       ];
     }
 
@@ -1332,21 +1335,6 @@ app.get('/api/users', async (req, res) => {
   } catch (error) {
     console.error('Get users error:', error);
     res.status(500).json({ error: 'Failed to fetch users' });
-  }
-});
-
-app.get('/api/users/:id', async (req, res) => {
-  try {
-    const user = await User.findById(req.params.id).select('-password');
-
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    res.json({ user: transformDoc(user) });
-  } catch (error) {
-    console.error('Get user error:', error);
-    res.status(500).json({ error: 'Failed to fetch user' });
   }
 });
 
