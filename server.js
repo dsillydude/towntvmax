@@ -7,6 +7,10 @@
  * - Webhook and status endpoints now ONLY use installationId.
  * - Removed legacy /api/users/log-install endpoint.
  * - System is now strictly based on unique installationId (UUID).
+ * 31) APPLIED: Replaced single category with mainCategory and subCategory.
+ * - Updated channelSchema for the new fields.
+ * - Updated channelValidationSchema for the new fields.
+ * - Upgraded GET /api/channels to support search and filtering.
  */
 
 const express = require('express');
@@ -79,7 +83,8 @@ const channelSchema = new mongoose.Schema({
     licenseServer: { type: String, default: '' },
   },
   playbackHeaders: { type: Map, of: String, default: {} },
-  category: { type: String, enum: ['sports', 'mziki', 'mengineyo', 'burudani'], default: 'sports' },
+  mainCategory: { type: String, required: true, default: 'General' },
+  subCategory: { type: String, required: true, default: 'Uncategorized' },
   description: { type: String, default: '' },
   thumbnailUrl: { type: String, default: '' },
   status: { type: Boolean, default: true },
@@ -161,7 +166,8 @@ const channelValidationSchema = Joi.object({
     licenseServer: Joi.string().uri().allow(''),
   }),
   playbackHeaders: Joi.object().pattern(Joi.string(), Joi.string()),
-  category: Joi.string().valid('sports', 'mziki', 'mengineyo', 'burudani'),
+  mainCategory: Joi.string().required(),
+  subCategory: Joi.string().required(),
   description: Joi.string().allow(''),
   thumbnailUrl: Joi.string().uri().allow(''),
   status: Joi.boolean(),
@@ -295,11 +301,20 @@ initializeDefaultSettings()
 // --- CHANNEL ROUTES --------------------------------------------------------
 app.get('/api/channels', async (req, res) => {
   try {
-    const { category } = req.query;
+    const { search, mainCategory, subCategory } = req.query;
     let query = {};
-    
-    if (category && ['sports', 'mziki', 'mengineyo', 'burudani'].includes(category)) {
-      query.category = category;
+
+    // Handle search query
+    if (search) {
+      query.name = { $regex: search, $options: 'i' }; // Case-insensitive search on the 'name' field
+    }
+
+    // Handle category filters
+    if (mainCategory) {
+      query.mainCategory = mainCategory;
+    }
+    if (subCategory) {
+      query.subCategory = subCategory;
     }
     
     const channels = await Channel.find(query).sort({ 
@@ -847,11 +862,17 @@ async function enforcePaywall(req, res, next) {
 // --- PUBLIC ROUTES (paywall-protected where relevant) ----------------------
 app.get('/api/public/channels', enforcePaywall, async (req, res) => {
   try {
-    const { category } = req.query;
+    const { category, mainCategory, subCategory } = req.query; // Keep `category` for backward compatibility if needed.
     let query = { status: true };
     
+    // New logic
+    if (mainCategory) query.mainCategory = mainCategory;
+    if (subCategory) query.subCategory = subCategory;
+
+    // Old logic (can be removed if clients are updated)
     if (category && ['sports', 'mziki', 'mengineyo', 'burudani'].includes(category)) {
-      query.category = category;
+      // A simple mapping could be done here if necessary, e.g.
+      // if (category === 'sports') query.mainCategory = 'Sports';
     }
     
     const channels = await Channel.find(query).sort({ 
