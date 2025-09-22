@@ -811,6 +811,56 @@ app.get('/api/stats/dashboard', async (req, res) => {
   }
 });
 
+
+// --- TRANSACTION ROUTES ----------------------------------------------------
+app.get('/api/transactions', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20; // Increased limit for practicality
+    const status = req.query.status;
+    const search = req.query.search || '';
+    
+    const filter = {};
+    if (status) {
+      filter.status = status.toUpperCase();
+    }
+    
+    if (search) {
+      filter.$or = [
+        { orderId: { $regex: search, $options: 'i' } },
+        { phoneNumber: { $regex: search, $options: 'i' } },
+        { name: { $regex: search, $options: 'i' } },
+        { packageTitle: { $regex: search, $options: 'i' } },
+      ];
+    }
+    
+    const skip = (page - 1) * limit;
+
+    const transactions = await Transaction.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Transaction.countDocuments(filter);
+
+    const response = {
+      transactions: transformArray(transactions),
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    };
+
+    res.json(response);
+
+  } catch (error) {
+    console.error('Failed to fetch transactions:', error);
+    res.status(500).json({ error: 'Failed to fetch transactions' });
+  }
+});
+
 // --- Enhanced Paywall Middleware (uses settings cache) --------------------
 async function enforcePaywall(req, res, next) {
   try {
