@@ -487,9 +487,17 @@ app.post('/api/settings', async (req, res) => {
   }
 });
 
+// lib/server.js
+
 app.put('/api/settings/:id', async (req, res) => {
   try {
     const { value, description } = req.body;
+    
+    // NEW: Add this line to debug the incoming value
+    console.log('--- DEBUG: Received value to update ---');
+    console.log(value);
+    console.log('------------------------------------');
+
     const updateData = {};
     if (value !== undefined) updateData.value = value;
     if (description !== undefined) updateData.description = description;
@@ -497,12 +505,14 @@ app.put('/api/settings/:id', async (req, res) => {
     const updatedSetting = await Settings.findByIdAndUpdate(req.params.id, updateData, { new: true });
     if (!updatedSetting) return res.status(404).json({ error: 'Setting not found' });
 
-    if (updatedSetting.key && updatedSetting.value !== undefined) {
-      setSettingInCache(updatedSetting.key, updatedSetting.value);
-    }
+    await hydrateSettingsCache();
 
     res.json({ message: 'Setting updated successfully', setting: transformDoc(updatedSetting) });
   } catch (error) {
+    // Also log the error if one occurs
+    console.error('--- DEBUG: Error during setting update ---');
+    console.error(error);
+    console.error('----------------------------------------');
     res.status(500).json({ error: 'Failed to update setting' });
   }
 });
