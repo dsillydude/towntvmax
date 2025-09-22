@@ -860,7 +860,7 @@ async function enforcePaywall(req, res, next) {
 }
 
 // --- PUBLIC ROUTES (paywall-protected where relevant) ----------------------
-app.get('/api/public/channels', enforcePaywall, async (req, res) => {
+app.get('/api/public/channels', async (req, res) => {
   try {
     // Only look for the new category fields
     const { mainCategory, subCategory } = req.query; 
