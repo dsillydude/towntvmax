@@ -154,6 +154,69 @@ const Notification = mongoose.model('Notification', notificationSchema);
 const User = mongoose.model('User', userSchema);
 const Transaction = mongoose.model('Transaction', transactionSchema);
 
+// --- STATS ROUTE -----------------------------------------------------------
+app.get('/api/stats', async (req, res) => {
+  try {
+    // 1. Get current month's transactions
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+    // 2. Aggregate transactions for revenue calculation
+    const revenueStats = await Transaction.aggregate([
+      {
+        $match: {
+          status: 'COMPLETED',
+          createdAt: { $gte: startOfMonth, $lt: endOfMonth }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalMonthlyRevenue: { $sum: '$price' },
+          transactions: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const monthlyRevenue = revenueStats.length > 0 ? revenueStats[0].totalMonthlyRevenue : 0;
+    const monthlyTransactions = revenueStats.length > 0 ? revenueStats[0].transactions : 0;
+
+    // 3. Count users
+    const totalUsers = await User.countDocuments();
+    const paidUsers = await User.countDocuments({ is_premium: true });
+    const freeUsers = totalUsers - paidUsers;
+    const activeUsers = await User.countDocuments({ last_login: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } });
+
+    // 4. Count channels
+    const totalChannels = await Channel.countDocuments();
+    const activeChannels = await Channel.countDocuments({ status: true });
+
+    // 5. Get top 5 channels by views (assuming a 'views' field exists, if not, this will be placeholder data for now)
+    const topChannels = await Channel.find({}).sort({ views: -1 }).limit(5).select('name views');
+
+    const stats = {
+      totalUsers,
+      paidUsers,
+      freeUsers,
+      activeUsers,
+      totalChannels,
+      activeChannels,
+      revenue: {
+        monthly: monthlyRevenue,
+        totalTransactions: monthlyTransactions,
+      },
+      userGrowth: [],
+      topChannels: topChannels.map(c => ({ name: c.name, viewCount: c.views || 0 }))
+    };
+
+    res.json(stats);
+  } catch (error) {
+    console.error('Error fetching dashboard stats:', error);
+    res.status(500).json({ error: 'Failed to fetch dashboard stats' });
+  }
+});
+
 // --- Validation Schemas ----------------------------------------------------
 const channelValidationSchema = Joi.object({
   name: Joi.string().required(),
