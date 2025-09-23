@@ -1613,6 +1613,6 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
     res.json({ user: transformDoc(user) });
   } catch (error) {
     console.error('Get profile error:', error);
-    res.status(500).json({ error: 'Failed to fetch user profile' });
+    res.status(500).json({ error: 'Failed to fetch  profile' });
   }
 });
