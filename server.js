@@ -3,14 +3,10 @@
  * --------------------------------------------------------------
  * Patches applied:
  * ... (previous patches)
- * 30) APPLIED: Removed all deviceId and phoneNumber fallbacks.
- * - Webhook and status endpoints now ONLY use installationId.
- * - Removed legacy /api/users/log-install endpoint.
- * - System is now strictly based on unique installationId (UUID).
- * 31) APPLIED: Replaced single category with mainCategory and subCategory.
- * - Updated channelSchema for the new fields.
- * - Updated channelValidationSchema for the new fields.
- * - Upgraded GET /api/channels to support search and filtering.
+ * 32) APPLIED: Added remote toggle for low-quality streams.
+ * - Added `playbackUrlLowQuality` to channelSchema.
+ * - Added `forceLowQuality` to default settings.
+ * - Patched public channel routes to swap URLs based on the setting.
  */
 
 const express = require('express');
@@ -76,6 +72,7 @@ const channelSchema = new mongoose.Schema({
   name: { type: String, required: true },
   channelId: { type: String, required: true, unique: true },
   playbackUrl: { type: String, required: true },
+  playbackUrlLowQuality: { type: String }, // ✅ PATCH: Added field for low quality stream
   drm: {
     enabled: { type: Boolean, default: false },
     provider: { type: String, enum: ['clearkey', 'none', 'widevine'], default: 'none' },
@@ -217,11 +214,15 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
+
+
+
 // --- Validation Schemas ----------------------------------------------------
 const channelValidationSchema = Joi.object({
   name: Joi.string().required(),
   channelId: Joi.string().required(),
   playbackUrl: Joi.string().uri().required(),
+  playbackUrlLowQuality: Joi.string().uri().allow(''), // ✅ PATCH: Added validation
   drm: Joi.object({
     enabled: Joi.boolean(),
     provider: Joi.string().valid('clearkey', 'none', 'widevine'),
@@ -332,19 +333,29 @@ async function initializeDefaultSettings() {
           description: 'Available subscription packages (JSON format)',
         },
         { key: 'whatsapp_link', value: 'https://wa.me/255745610606', description: 'Customer support WhatsApp link' },
+        { key: 'forceLowQuality', value: 'false', description: 'Force all streams to use the low quality URL' }, // ✅ PATCH: Added new setting
       ];
       await Settings.insertMany(defaults);
       console.log('Default settings initialized');
     } else {
-      const whatsappLink = await Settings.findOne({ key: 'whatsapp_link' });
-      if (!whatsappLink) {
-        await Settings.create({
-          key: 'whatsapp_link',
-          value: 'https://wa.me/0715123456',
-          description: 'Customer support WhatsApp link',
-        });
-        console.log('Added missing whatsapp_link setting.');
+      // ✅ PATCH START: Logic to add missing settings on startup
+      const requiredKeys = ['whatsapp_link', 'forceLowQuality'];
+      for (const key of requiredKeys) {
+        const settingExists = await Settings.findOne({ key });
+        if (!settingExists) {
+            let value, description;
+            if (key === 'whatsapp_link') {
+                value = 'https://wa.me/255745610606';
+                description = 'Customer support WhatsApp link';
+            } else if (key === 'forceLowQuality') {
+                value = 'false';
+                description = 'Force all streams to use the low quality URL';
+            }
+          await Settings.create({ key, value, description });
+          console.log(`Added missing setting: ${key}.`);
+        }
       }
+      // ✅ PATCH END
     }
   } catch (error) {
     console.error('Error initializing default settings:', error);
@@ -996,11 +1007,25 @@ app.get('/api/public/channels', async (req, res) => {
       query.subCategory = subCategory;
     }
     
+    // ✅ PATCH START: Logic for forcing low quality streams
     const channels = await Channel.find(query).sort({ 
       position: 1,
       createdAt: -1
-    });
+    }).lean(); // Use .lean() for faster modification
     
+    const forceLowQualitySetting = await getSetting('forceLowQuality', 'false');
+    const forceLow = forceLowQualitySetting === 'true';
+
+    if (forceLow) {
+      channels.forEach(channel => {
+        // If a low quality URL exists, swap it with the main one
+        if (channel.playbackUrlLowQuality) {
+          channel.playbackUrl = channel.playbackUrlLowQuality;
+        }
+      });
+    }
+    // ✅ PATCH END
+
     res.json({ channels: transformArray(channels) });
   } catch (error) {
     console.error('Failed to fetch public channels:', error);
@@ -1010,11 +1035,22 @@ app.get('/api/public/channels', async (req, res) => {
 
 app.get('/api/public/channels/:channelId', enforcePaywall, async (req, res) => {
   try {
+    // ✅ PATCH START: Logic for forcing low quality streams
     const channel = await Channel.findOne({ 
       channelId: req.params.channelId, 
       status: true 
-    });
+    }).lean(); // Use .lean() for faster modification
+    
     if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    
+    const forceLowQualitySetting = await getSetting('forceLowQuality', 'false');
+    const forceLow = forceLowQualitySetting === 'true';
+
+    if (forceLow && channel.playbackUrlLowQuality) {
+      channel.playbackUrl = channel.playbackUrlLowQuality;
+    }
+    // ✅ PATCH END
+
     res.json({ channel: transformDoc(channel) });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch channel' });
