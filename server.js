@@ -18,6 +18,10 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 const crypto = require('crypto');
+// ============================================================================
+// ✅ 1. ADDED NEW IMPORT
+// ============================================================================
+const { XMLParser, XMLBuilder } = require("fast-xml-parser");
 require('dotenv').config();
 
 const app = express();
@@ -1614,5 +1618,103 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({ error: 'Failed to fetch  profile' });
+  }
+});
+
+
+// ============================================================================
+// ✅ 2. ADDED NEW PROXY ROUTE
+// ============================================================================
+app.get("/api/stream/manifest-proxy", async (req, res) => {
+  try {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ error: "Missing url query param" });
+
+    const presets = { "360": 600000, "480": 1200000, "720": 2500000, "1080": 5000000 };
+    let maxBw = 1200000; // default to 480p
+    if (req.query.max_bw) {
+      maxBw = parseInt(req.query.max_bw, 10);
+    } else if (req.query.quality && presets[req.query.quality]) {
+      maxBw = presets[req.query.quality];
+    }
+
+    const upstreamResp = await axios.get(url, {
+      responseType: "text",
+      timeout: 10000,
+      validateStatus: () => true,
+    });
+
+    if (upstreamResp.status >= 400) {
+      return res
+        .status(502)
+        .json({ error: "Failed to fetch upstream manifest", status: upstreamResp.status });
+    }
+
+    const body = upstreamResp.data;
+    const contentType = upstreamResp.headers["content-type"] || "";
+
+    const isDASH = url.toLowerCase().includes(".mpd") || contentType.includes("mpd");
+    const isHLS = url.toLowerCase().includes(".m3u8") || body.includes("#EXTM3U");
+
+    if (isDASH) {
+      const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "" });
+      const builder = new XMLBuilder({ ignoreAttributes: false, attributeNamePrefix: "" });
+      const obj = parser.parse(body);
+
+      function filterReps(node) {
+        if (!node) return;
+        if (Array.isArray(node.AdaptationSet)) {
+          node.AdaptationSet.forEach((set) => filterReps(set));
+        } else if (node.AdaptationSet) {
+          filterReps(node.AdaptationSet);
+        }
+
+        if (Array.isArray(node.Representation)) {
+          node.Representation = node.Representation.filter((rep) => {
+            const bw = parseInt(rep.bandwidth || 0, 10);
+            return bw <= maxBw;
+          });
+          if (node.Representation.length === 0) {
+            // fallback: keep the lowest one
+            node.Representation = [rep.reduce((min, r) =>
+              parseInt(r.bandwidth || 0, 10) < parseInt(min.bandwidth || 9999999, 10) ? r : min
+            )];
+          }
+        }
+      }
+
+      if (obj.MPD && obj.MPD.Period) filterReps(obj.MPD.Period);
+
+      const newXml = builder.build(obj);
+      res.setHeader("content-type", "application/dash+xml; charset=utf-8");
+      return res.send(newXml);
+
+    } else if (isHLS) {
+      const lines = body.split(/\r?\n/);
+      const out = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.startsWith("#EXT-X-STREAM-INF:")) {
+          const bwMatch = line.match(/BANDWIDTH=(\d+)/i);
+          const bwVal = bwMatch ? parseInt(bwMatch[1], 10) : 0;
+          if (bwVal <= maxBw) {
+            out.push(line);
+            out.push(lines[i + 1]); // add URL line
+          }
+          i++;
+        } else {
+          out.push(line);
+        }
+      }
+      res.setHeader("content-type", "application/vnd.apple.mpegurl; charset=utf-8");
+      return res.send(out.join("\n"));
+    } else {
+      // Just return as-is
+      res.setHeader("content-type", contentType || "text/plain");
+      return res.send(body);
+    }
+  } catch (err) {
+    console.error("Manifest proxy error:", err.message);
+    res.status(500).json({ error: "Manifest proxy failed", details: err.message });
   }
 });
