@@ -3,10 +3,9 @@
  * --------------------------------------------------------------
  * Patches applied:
  * ... (previous patches)
- * 32) APPLIED: Added remote toggle for low-quality streams.
- * - Added `playbackUrlLowQuality` to channelSchema.
- * - Added `forceLowQuality` to default settings.
- * - Patched public channel routes to swap URLs based on the setting.
+ * 33) APPLIED: Added manifest proxy to handle relative segment URLs.
+ * - Added `absolutizeSegmentTemplate` helper function.
+ * - Patched DASH handling logic to convert relative paths to absolute.
  */
 
 const express = require('express');
@@ -18,9 +17,6 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 const crypto = require('crypto');
-// ============================================================================
-// ✅ 1. ADDED NEW IMPORT
-// ============================================================================
 const { XMLParser, XMLBuilder } = require("fast-xml-parser");
 require('dotenv').config();
 
@@ -76,7 +72,7 @@ const channelSchema = new mongoose.Schema({
   name: { type: String, required: true },
   channelId: { type: String, required: true, unique: true },
   playbackUrl: { type: String, required: true },
-  playbackUrlLowQuality: { type: String }, // ✅ PATCH: Added field for low quality stream
+  playbackUrlLowQuality: { type: String }, 
   drm: {
     enabled: { type: Boolean, default: false },
     provider: { type: String, enum: ['clearkey', 'none', 'widevine'], default: 'none' },
@@ -126,9 +122,9 @@ const notificationSchema = new mongoose.Schema({
 
 const userSchema = new mongoose.Schema({
   name: { type: String },
-  installationId: { type: String, unique: true, sparse: true }, // ✅ Main unique identity (UUID)
-  deviceId: { type: String, index: true, sparse: true },        // For analytics/info only
-  phoneNumber: { type: String, unique: true, sparse: true },   // Can be linked to one user
+  installationId: { type: String, unique: true, sparse: true }, 
+  deviceId: { type: String, index: true, sparse: true },        
+  phoneNumber: { type: String, unique: true, sparse: true },   
   is_premium: { type: Boolean, default: false },
   subscriptionEndDate: { type: Date },
   last_login: { type: Date, default: Date.now },
@@ -144,8 +140,8 @@ const transactionSchema = new mongoose.Schema({
   price: { type: Number },
   status: { type: String, enum: ['PENDING', 'COMPLETED', 'FAILED', 'CANCELLED', 'EXPIRED'], default: 'PENDING' },
   token: { type: String },
-  deviceId: { type: String }, // For analytics/info only
-  installationId: { type: String }, // The ONLY link to a user
+  deviceId: { type: String }, 
+  installationId: { type: String }, 
 }, { timestamps: true });
 
 const Channel = mongoose.model('Channel', channelSchema);
@@ -158,12 +154,10 @@ const Transaction = mongoose.model('Transaction', transactionSchema);
 // --- STATS ROUTE -----------------------------------------------------------
 app.get('/api/stats', async (req, res) => {
   try {
-    // 1. Get current month's transactions
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
 
-    // 2. Aggregate transactions for revenue calculation
     const revenueStats = await Transaction.aggregate([
       {
         $match: {
@@ -183,17 +177,14 @@ app.get('/api/stats', async (req, res) => {
     const monthlyRevenue = revenueStats.length > 0 ? revenueStats[0].totalMonthlyRevenue : 0;
     const monthlyTransactions = revenueStats.length > 0 ? revenueStats[0].transactions : 0;
 
-    // 3. Count users
     const totalUsers = await User.countDocuments();
     const paidUsers = await User.countDocuments({ is_premium: true });
     const freeUsers = totalUsers - paidUsers;
     const activeUsers = await User.countDocuments({ last_login: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } });
 
-    // 4. Count channels
     const totalChannels = await Channel.countDocuments();
     const activeChannels = await Channel.countDocuments({ status: true });
 
-    // 5. Get top 5 channels by views (assuming a 'views' field exists, if not, this will be placeholder data for now)
     const topChannels = await Channel.find({}).sort({ views: -1 }).limit(5).select('name views');
 
     const stats = {
@@ -218,15 +209,12 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
-
-
-
 // --- Validation Schemas ----------------------------------------------------
 const channelValidationSchema = Joi.object({
   name: Joi.string().required(),
   channelId: Joi.string().required(),
   playbackUrl: Joi.string().uri().required(),
-  playbackUrlLowQuality: Joi.string().uri().allow(''), // ✅ PATCH: Added validation
+  playbackUrlLowQuality: Joi.string().uri().allow(''), 
   drm: Joi.object({
     enabled: Joi.boolean(),
     provider: Joi.string().valid('clearkey', 'none', 'widevine'),
@@ -337,12 +325,11 @@ async function initializeDefaultSettings() {
           description: 'Available subscription packages (JSON format)',
         },
         { key: 'whatsapp_link', value: 'https://wa.me/255745610606', description: 'Customer support WhatsApp link' },
-        { key: 'forceLowQuality', value: 'false', description: 'Force all streams to use the low quality URL' }, // ✅ PATCH: Added new setting
+        { key: 'forceLowQuality', value: 'false', description: 'Force all streams to use the low quality URL' }, 
       ];
       await Settings.insertMany(defaults);
       console.log('Default settings initialized');
     } else {
-      // ✅ PATCH START: Logic to add missing settings on startup
       const requiredKeys = ['whatsapp_link', 'forceLowQuality'];
       for (const key of requiredKeys) {
         const settingExists = await Settings.findOne({ key });
@@ -359,7 +346,6 @@ async function initializeDefaultSettings() {
           console.log(`Added missing setting: ${key}.`);
         }
       }
-      // ✅ PATCH END
     }
   } catch (error) {
     console.error('Error initializing default settings:', error);
@@ -371,10 +357,6 @@ initializeDefaultSettings()
   .then(count => console.log(`🚀 Settings cache initialized with ${count} keys (ttl=${settingsCache.ttlMs}ms)`))
   .catch(err => console.error('Initial settings cache hydrate failed:', err.message));
 
-// --- PATCH: REMOVED LEGACY /api/users/log-install ENDPOINT ---
-// This endpoint was based on deviceId and is no longer needed.
-// All user creation is now handled by /api/auth/device-login.
-
 
 // --- CHANNEL ROUTES --------------------------------------------------------
 app.get('/api/channels', async (req, res) => {
@@ -382,12 +364,9 @@ app.get('/api/channels', async (req, res) => {
     const { search, mainCategory, subCategory } = req.query;
     let query = {};
 
-    // Handle search query
     if (search) {
-      query.name = { $regex: search, $options: 'i' }; // Case-insensitive search on the 'name' field
+      query.name = { $regex: search, $options: 'i' }; 
     }
-
-    // Handle category filters
     if (mainCategory) {
       query.mainCategory = mainCategory;
     }
@@ -565,17 +544,10 @@ app.post('/api/settings', async (req, res) => {
   }
 });
 
-// lib/server.js
-
 app.put('/api/settings/:id', async (req, res) => {
   try {
     const { value, description } = req.body;
     
-    // NEW: Add this line to debug the incoming value
-    console.log('--- DEBUG: Received value to update ---');
-    console.log(value);
-    console.log('------------------------------------');
-
     const updateData = {};
     if (value !== undefined) updateData.value = value;
     if (description !== undefined) updateData.description = description;
@@ -587,10 +559,6 @@ app.put('/api/settings/:id', async (req, res) => {
 
     res.json({ message: 'Setting updated successfully', setting: transformDoc(updatedSetting) });
   } catch (error) {
-    // Also log the error if one occurs
-    console.error('--- DEBUG: Error during setting update ---');
-    console.error(error);
-    console.error('----------------------------------------');
     res.status(500).json({ error: 'Failed to update setting' });
   }
 });
@@ -894,7 +862,7 @@ app.get('/api/stats/dashboard', async (req, res) => {
 app.get('/api/transactions', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20; // Increased limit for practicality
+    const limit = parseInt(req.query.limit) || 20; 
     const status = req.query.status;
     const search = req.query.search || '';
     
@@ -1000,7 +968,6 @@ async function enforcePaywall(req, res, next) {
 // --- PUBLIC ROUTES (paywall-protected where relevant) ----------------------
 app.get('/api/public/channels', async (req, res) => {
   try {
-    // Only look for the new category fields
     const { mainCategory, subCategory } = req.query; 
     let query = { status: true };
     
@@ -1011,24 +978,21 @@ app.get('/api/public/channels', async (req, res) => {
       query.subCategory = subCategory;
     }
     
-    // ✅ PATCH START: Logic for forcing low quality streams
     const channels = await Channel.find(query).sort({ 
       position: 1,
       createdAt: -1
-    }).lean(); // Use .lean() for faster modification
+    }).lean(); 
     
     const forceLowQualitySetting = await getSetting('forceLowQuality', 'false');
     const forceLow = forceLowQualitySetting === 'true';
 
     if (forceLow) {
       channels.forEach(channel => {
-        // If a low quality URL exists, swap it with the main one
         if (channel.playbackUrlLowQuality) {
           channel.playbackUrl = channel.playbackUrlLowQuality;
         }
       });
     }
-    // ✅ PATCH END
 
     res.json({ channels: transformArray(channels) });
   } catch (error) {
@@ -1039,11 +1003,10 @@ app.get('/api/public/channels', async (req, res) => {
 
 app.get('/api/public/channels/:channelId', enforcePaywall, async (req, res) => {
   try {
-    // ✅ PATCH START: Logic for forcing low quality streams
     const channel = await Channel.findOne({ 
       channelId: req.params.channelId, 
       status: true 
-    }).lean(); // Use .lean() for faster modification
+    }).lean(); 
     
     if (!channel) return res.status(404).json({ error: 'Channel not found' });
     
@@ -1053,7 +1016,6 @@ app.get('/api/public/channels/:channelId', enforcePaywall, async (req, res) => {
     if (forceLow && channel.playbackUrlLowQuality) {
       channel.playbackUrl = channel.playbackUrlLowQuality;
     }
-    // ✅ PATCH END
 
     res.json({ channel: transformDoc(channel) });
   } catch (error) {
@@ -1089,10 +1051,8 @@ app.get('/api/public/notifications', async (req, res) => {
 // --- SUBSCRIBE & PAYMENT ---------------------------------------------------
 app.post('/api/subscribe/initiate-payment', async (req, res) => {
   try {
-    // --- PATCH: installationId is now the most critical piece of data ---
     const { name, phoneNumber, package: packageTitle, installationId } = req.body;
     
-    // Ensure the client has sent the installationId
     if (!name || !phoneNumber || !packageTitle || !installationId) {
       return res.status(400).json({ error: 'Name, phone number, package, and installationId are required.' });
     }
@@ -1124,8 +1084,7 @@ app.post('/api/subscribe/initiate-payment', async (req, res) => {
       packageTitle,
       price: amount,
       status: 'PENDING',
-      installationId: installationId, // This is the crucial link to the user
-      // deviceId is no longer needed to find the user
+      installationId: installationId, 
     });
     await tx.save();
 
@@ -1177,7 +1136,6 @@ app.post('/api/subscribe/initiate-payment', async (req, res) => {
   }
 });
 
-// --- PATCH START: Webhook now ONLY uses installationId ---
 app.post('/api/webhooks/zenopay', async (req, res) => {
   try {
     const { order_id, payment_status } = req.body || {};
@@ -1208,8 +1166,6 @@ app.post('/api/webhooks/zenopay', async (req, res) => {
 
       const now = new Date();
       
-      // Find the user ONLY by the installationId from the transaction.
-      // All fallback logic has been removed.
       const existingUser = tx.installationId 
         ? await User.findOne({ installationId: tx.installationId }) 
         : null;
@@ -1232,8 +1188,6 @@ app.post('/api/webhooks/zenopay', async (req, res) => {
         existingUser.subscriptionEndDate = newEndDate;
         if (tx.name) existingUser.name = tx.name;
         
-        // This logic remains to prevent a crash if a new user tries to pay
-        // with a phone number that's already linked to a different account.
         let shouldUpdatePhoneNumber = !existingUser.phoneNumber && tx.phoneNumber;
         if (shouldUpdatePhoneNumber) {
             const phoneOwner = await User.findOne({ phoneNumber: tx.phoneNumber });
@@ -1251,8 +1205,6 @@ app.post('/api/webhooks/zenopay', async (req, res) => {
 
         userToSign = existingUser;
       } else {
-        // This block now only runs if the installationId from the payment
-        // does not match any user in the database. This implies a new user.
         console.log(`Creating new premium user for installationId ${tx.installationId}`);
         const newEndDate = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
         
@@ -1290,8 +1242,6 @@ app.post('/api/webhooks/zenopay', async (req, res) => {
     res.status(500).send("Error processing webhook");
   }
 });
-// --- PATCH END ---
-
 
 app.get('/api/subscribe/status/:orderId', async (req, res) => {
   try {
@@ -1300,12 +1250,9 @@ app.get('/api/subscribe/status/:orderId', async (req, res) => {
     if (!tx) return res.status(404).json({ status: 'NOT_FOUND' });
 
     if (tx.status === 'COMPLETED') {
-      // --- PATCH START: Status check now ONLY uses installationId ---
-      // Find user exclusively by the installationId stored in the transaction.
       const user = tx.installationId 
         ? await User.findOne({ installationId: tx.installationId }) 
         : null;
-      // --- PATCH END ---
 
       return res.json({ status: 'COMPLETED', token: tx.token, user: transformDoc(user) });
     }
@@ -1389,15 +1336,13 @@ app.post('/api/auth/device-login', async (req, res) => {
     let user = await User.findOne({ installationId });
 
     if (user) {
-      // User exists, update last login and deviceId (for analytics)
       user.deviceId = deviceId; 
       user.last_login = new Date();
       await user.save();
     } else {
-      // This is a new installation, create a new user.
       user = new User({
         installationId,
-        deviceId, // Stored for info, not for auth
+        deviceId, 
         last_login: new Date(),
         is_premium: false
       });
@@ -1420,8 +1365,6 @@ app.post('/api/auth/device-login', async (req, res) => {
   } catch (error) {
     console.error('Unified device login error:', error);
     if (error.code === 11000) {
-      // This will now only trigger if two requests try to create a user with the same
-      // installationId at the exact same time. Highly unlikely, but good to handle.
       return res.status(500).json({ error: 'Duplicate key error. Please try again.' });
     }
     res.status(500).json({ error: 'Internal server error' });
@@ -1462,7 +1405,6 @@ app.get('/api/users', async (req, res) => {
     }
 
     if (search) {
-      // Search remains flexible for admin purposes
       filter.$or = [
         { name: { $regex: search, $options: 'i' } },
         { phoneNumber: { $regex: search, $options: 'i' } },
@@ -1623,10 +1565,29 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
 
 
 // ============================================================================
-// ✅ 2. ADDED NEW PROXY ROUTE
+// MANIFEST PROXY ROUTE (with Quality & Path Fixes)
 // ============================================================================
 app.get("/api/stream/manifest-proxy", async (req, res) => {
   try {
+    // Helper: make SegmentTemplate paths absolute
+    function absolutizeSegmentTemplate(obj, baseUrl) {
+      if (!obj) return;
+      if (Array.isArray(obj.AdaptationSet)) {
+        obj.AdaptationSet.forEach(set => absolutizeSegmentTemplate(set, baseUrl));
+      } else if (obj.AdaptationSet) {
+        absolutizeSegmentTemplate(obj.AdaptationSet, baseUrl);
+      }
+    
+      if (obj.SegmentTemplate) {
+        if (obj.SegmentTemplate.initialization && !obj.SegmentTemplate.initialization.startsWith("http")) {
+          obj.SegmentTemplate.initialization = baseUrl + obj.SegmentTemplate.initialization;
+        }
+        if (obj.SegmentTemplate.media && !obj.SegmentTemplate.media.startsWith("http")) {
+          obj.SegmentTemplate.media = baseUrl + obj.SegmentTemplate.media;
+        }
+      }
+    }
+
     const { url } = req.query;
     if (!url) return res.status(400).json({ error: "Missing url query param" });
 
@@ -1660,6 +1621,13 @@ app.get("/api/stream/manifest-proxy", async (req, res) => {
       const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "" });
       const builder = new XMLBuilder({ ignoreAttributes: false, attributeNamePrefix: "" });
       const obj = parser.parse(body);
+
+      // Build base URL from original manifest URL
+      const urlObj = new URL(url);
+      const baseUrl = urlObj.origin + urlObj.pathname.replace(/[^/]+$/, "");
+      
+      // Fix relative segment paths
+      absolutizeSegmentTemplate(obj.MPD.Period, baseUrl);
 
       function filterReps(node) {
         if (!node) return;
