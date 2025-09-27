@@ -4,9 +4,7 @@
  * Patches applied:
  * ... (previous patches)
  * 35) APPLIED: Fixed JWT malformed error.
- * - Consolidated authMiddleware into a single, correct implementation.
- * - Corrected the argument order in `jwt.verify(token, secret)`.
- * - Moved JWT_SECRET and authMiddleware definitions to a more logical location.
+ * 36) PATCHED: Removed authMiddleware for a login-free admin panel.
  */
 
 const express = require('express');
@@ -71,7 +69,7 @@ const channelSchema = new mongoose.Schema({
   name: { type: String, required: true },
   channelId: { type: String, required: true, unique: true },
   playbackUrl: { type: String, required: true },
-  playbackUrlLowQuality: { type: String }, 
+  playbackUrlLowQuality: { type: String },
   drm: {
     enabled: { type: Boolean, default: false },
     provider: { type: String, enum: ['clearkey', 'none', 'widevine'], default: 'none' },
@@ -86,7 +84,7 @@ const channelSchema = new mongoose.Schema({
   status: { type: Boolean, default: true },
   tag: { type: String, default: '' },
   position: { type: Number, default: 999 },
-  
+
 }, { timestamps: true });
 
 const settingsSchema = new mongoose.Schema({
@@ -121,15 +119,15 @@ const notificationSchema = new mongoose.Schema({
 
 const userSchema = new mongoose.Schema({
   name: { type: String },
-  installationId: { type: String, unique: true, sparse: true }, 
-  deviceId: { type: String, index: true, sparse: true },        
-  phoneNumber: { type: String, unique: true, sparse: true },   
+  installationId: { type: String, unique: true, sparse: true },
+  deviceId: { type: String, index: true, sparse: true },
+  phoneNumber: { type: String, unique: true, sparse: true },
   is_premium: { type: Boolean, default: false },
   subscriptionEndDate: { type: Date },
   last_login: { type: Date, default: Date.now },
   username: { type: String, sparse: true },
   email: { type: String, sparse: true },
-  trialSecondsConsumed: { type: Number, default: 0 }, 
+  trialSecondsConsumed: { type: Number, default: 0 },
 }, { timestamps: true });
 
 const transactionSchema = new mongoose.Schema({
@@ -151,7 +149,7 @@ const Notification = mongoose.model('Notification', notificationSchema);
 const User = mongoose.model('User', userSchema);
 const Transaction = mongoose.model('Transaction', transactionSchema);
 
-// --- Authentication Middleware (FIXED) -------------------------------------
+// --- Authentication Middleware (Kept for reference, but no longer used in admin routes) ---
 function authMiddleware(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
@@ -406,12 +404,12 @@ app.get('/api/channels', async (req, res) => {
     if (subCategory) {
       query.subCategory = subCategory;
     }
-    
-    const channels = await Channel.find(query).sort({ 
+
+    const channels = await Channel.find(query).sort({
       position: 1,
       createdAt: -1
     });
-    
+
     res.json({ channels: transformArray(channels) });
   } catch (error) {
     console.error('Failed to fetch channels:', error);
@@ -580,7 +578,7 @@ app.post('/api/settings', async (req, res) => {
 app.put('/api/settings/:id', async (req, res) => {
   try {
     const { value, description } = req.body;
-    
+
     const updateData = {};
     if (value !== undefined) updateData.value = value;
     if (description !== undefined) updateData.description = description;
@@ -833,12 +831,12 @@ app.get('/api/transactions', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const status = req.query.status;
     const search = req.query.search || '';
-    
+
     const filter = {};
     if (status) {
       filter.status = status.toUpperCase();
     }
-    
+
     if (search) {
       filter.$or = [
         { orderId: { $regex: search, $options: 'i' } },
@@ -847,7 +845,7 @@ app.get('/api/transactions', async (req, res) => {
         { packageTitle: { $regex: search, $options: 'i' } },
       ];
     }
-    
+
     const skip = (page - 1) * limit;
 
     const transactions = await Transaction.find(filter)
@@ -932,21 +930,21 @@ async function enforcePaywall(req, res, next) {
 // --- PUBLIC ROUTES (paywall-protected where relevant) ----------------------
 app.get('/api/public/channels', async (req, res) => {
   try {
-    const { mainCategory, subCategory } = req.query; 
+    const { mainCategory, subCategory } = req.query;
     let query = { status: true };
-    
+
     if (mainCategory) {
       query.mainCategory = mainCategory;
     }
     if (subCategory) {
       query.subCategory = subCategory;
     }
-    
-    const channels = await Channel.find(query).sort({ 
+
+    const channels = await Channel.find(query).sort({
       position: 1,
       createdAt: -1
     }).lean();
-    
+
     const forceLowQualitySetting = await getSetting('forceLowQuality', 'false');
     const forceLow = forceLowQualitySetting === 'true';
 
@@ -967,13 +965,13 @@ app.get('/api/public/channels', async (req, res) => {
 
 app.get('/api/public/channels/:channelId', enforcePaywall, async (req, res) => {
   try {
-    const channel = await Channel.findOne({ 
-      channelId: req.params.channelId, 
-      status: true 
+    const channel = await Channel.findOne({
+      channelId: req.params.channelId,
+      status: true
     }).lean();
-    
+
     if (!channel) return res.status(404).json({ error: 'Channel not found' });
-    
+
     const forceLowQualitySetting = await getSetting('forceLowQuality', 'false');
     const forceLow = forceLowQualitySetting === 'true';
 
@@ -1016,7 +1014,7 @@ app.get('/api/public/notifications', async (req, res) => {
 app.post('/api/subscribe/initiate-payment', async (req, res) => {
   try {
     const { name, phoneNumber, package: packageTitle, installationId } = req.body;
-    
+
     if (!name || !phoneNumber || !packageTitle || !installationId) {
       return res.status(400).json({ error: 'Name, phone number, package, and installationId are required.' });
     }
@@ -1129,15 +1127,15 @@ app.post('/api/webhooks/zenopay', async (req, res) => {
       }
 
       const now = new Date();
-      
-      const existingUser = tx.installationId 
-        ? await User.findOne({ installationId: tx.installationId }) 
+
+      const existingUser = tx.installationId
+        ? await User.findOne({ installationId: tx.installationId })
         : null;
 
       if (existingUser) {
         console.log(`Found user by installationId: ${tx.installationId}`);
       }
-      
+
       let userToSign;
 
       if (existingUser) {
@@ -1151,7 +1149,7 @@ app.post('/api/webhooks/zenopay', async (req, res) => {
         existingUser.is_premium = true;
         existingUser.subscriptionEndDate = newEndDate;
         if (tx.name) existingUser.name = tx.name;
-        
+
         let shouldUpdatePhoneNumber = !existingUser.phoneNumber && tx.phoneNumber;
         if (shouldUpdatePhoneNumber) {
             const phoneOwner = await User.findOne({ phoneNumber: tx.phoneNumber });
@@ -1163,7 +1161,7 @@ app.post('/api/webhooks/zenopay', async (req, res) => {
         if (shouldUpdatePhoneNumber) {
             existingUser.phoneNumber = tx.phoneNumber;
         }
-        
+
         await existingUser.save();
         console.log(`[ZenoPay] Extended user ${existingUser.id} until ${existingUser.subscriptionEndDate?.toISOString?.()}`);
 
@@ -1171,7 +1169,7 @@ app.post('/api/webhooks/zenopay', async (req, res) => {
       } else {
         console.log(`Creating new premium user for installationId ${tx.installationId}`);
         const newEndDate = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
-        
+
         const newUser = await User.create({
           name: tx.name || 'New User',
           phoneNumber: tx.phoneNumber,
@@ -1215,13 +1213,13 @@ app.get('/api/subscribe/status/:orderId', async (req, res) => {
     if (!tx) return res.status(404).json({ status: 'NOT_FOUND' });
 
     if (tx.status === 'COMPLETED') {
-      const user = tx.installationId 
-        ? await User.findOne({ installationId: tx.installationId }) 
+      const user = tx.installationId
+        ? await User.findOne({ installationId: tx.installationId })
         : null;
 
       return res.json({ status: 'COMPLETED', token: tx.token, user: transformDoc(user) });
     }
-    
+
     return res.json({ status: tx.status });
   } catch(err) {
     console.error('Subscription status error:', err);
@@ -1265,6 +1263,7 @@ const trialConsumptionValidation = Joi.object({
   seconds: Joi.number().integer().min(1).required(),
 });
 
+// PATCH: This route still needs authMiddleware because it's for logged-in mobile app users, not the admin.
 app.post('/api/trial/consume', authMiddleware, async (req, res) => {
   try {
     const { error } = trialConsumptionValidation.validate(req.body);
@@ -1282,7 +1281,7 @@ app.post('/api/trial/consume', authMiddleware, async (req, res) => {
     );
 
     if (!updatedUser) {
-      return res.json({ 
+      return res.json({
           message: 'No action needed (user is premium or not found).',
           trial_active: true
       });
@@ -1290,7 +1289,7 @@ app.post('/api/trial/consume', authMiddleware, async (req, res) => {
 
     const totalTrialSecondsStr = await getSetting('trial_seconds', '0');
     const totalTrialSeconds = parseInt(totalTrialSecondsStr || '0', 10);
-    
+
     const isTrialStillActive = updatedUser.trialSecondsConsumed < totalTrialSeconds;
 
     console.log(`[TRIAL] User ${userId} consumed ${seconds}s. Total: ${updatedUser.trialSecondsConsumed}/${totalTrialSeconds}. Active: ${isTrialStillActive}`);
@@ -1346,7 +1345,7 @@ app.post('/api/auth/device-login', async (req, res) => {
     let user = await User.findOne({ installationId });
 
     if (user) {
-      user.deviceId = deviceId; 
+      user.deviceId = deviceId;
       user.last_login = new Date();
       await user.save();
     } else {
@@ -1381,8 +1380,8 @@ app.post('/api/auth/device-login', async (req, res) => {
   }
 });
 
-// --- USER MANAGEMENT ROUTES -----------------------------------------------
-app.get('/api/users', authMiddleware, async (req, res) => {
+// --- USER MANAGEMENT ROUTES (PATCHED: authMiddleware removed) ---
+app.get('/api/users', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
@@ -1433,7 +1432,7 @@ app.get('/api/users', authMiddleware, async (req, res) => {
   }
 });
 
-app.get('/api/users/:id', authMiddleware, async (req, res) => {
+app.get('/api/users/:id', async (req, res) => {
   try {
     const user = await User.findById(req.params.id).select('-password');
 
@@ -1452,20 +1451,20 @@ const manualUpgradeValidation = Joi.object({
   days: Joi.number().integer().min(1).required(),
 });
 
-app.post('/api/users/:id/upgrade-premium', authMiddleware, async (req, res) => {
+app.post('/api/users/:id/upgrade-premium', async (req, res) => {
   try {
     const { error } = manualUpgradeValidation.validate(req.body);
     if (error) {
       return res.status(400).json({ error: error.details[0].message });
     }
-    
+
     const { days } = req.body;
     const user = await User.findById(req.params.id);
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
-    
+
     const now = new Date();
     const baseDate = user.subscriptionEndDate && user.subscriptionEndDate > now
       ? user.subscriptionEndDate
@@ -1475,7 +1474,7 @@ app.post('/api/users/:id/upgrade-premium', authMiddleware, async (req, res) => {
 
     user.is_premium = true;
     user.subscriptionEndDate = newEndDate;
-    
+
     await user.save();
 
     console.log(`MANUAL UPGRADE: User ${user.id} upgraded for ${days} days. New expiry: ${newEndDate.toISOString()}`);
@@ -1483,11 +1482,11 @@ app.post('/api/users/:id/upgrade-premium', authMiddleware, async (req, res) => {
     const token = jwt.sign(
       { user: { id: user.id } },
       JWT_SECRET,
-      { expiresIn: `${days}d` } 
+      { expiresIn: `${days}d` }
     );
 
-    res.json({ 
-      message: 'User upgraded successfully', 
+    res.json({
+      message: 'User upgraded successfully',
       user: transformDoc(user),
       token: token,
     });
@@ -1499,7 +1498,7 @@ app.post('/api/users/:id/upgrade-premium', authMiddleware, async (req, res) => {
 });
 
 
-app.put('/api/users/:id', authMiddleware, async (req, res) => {
+app.put('/api/users/:id', async (req, res) => {
   try {
     const { name, phoneNumber, is_premium, subscriptionEndDate } = req.body;
 
@@ -1526,7 +1525,7 @@ app.put('/api/users/:id', authMiddleware, async (req, res) => {
   }
 });
 
-app.delete('/api/users/:id', authMiddleware, async (req, res) => {
+app.delete('/api/users/:id', async (req, res) => {
   try {
     const user = await User.findByIdAndDelete(req.params.id);
 
@@ -1541,6 +1540,9 @@ app.delete('/api/users/:id', authMiddleware, async (req, res) => {
   }
 });
 
+// Note: /api/auth/me is intended for a logged-in user to get their own profile.
+// Making it public without an ID doesn't make sense, so it's best to leave it or remove it.
+// I've left it as-is, but your admin panel doesn't seem to use it.
 app.get('/api/auth/me', authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.user.user.id).select('-password');
@@ -1552,7 +1554,6 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
     res.json({ user: transformDoc(user) });
   } catch (error) {
     console.error('Get profile error:', error);
-    res.status(500).json({ error: 'Failed to fetch  profile' });
+    res.status(500).json({ error: 'Failed to fetch profile' });
   }
 });
-
