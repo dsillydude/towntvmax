@@ -3,14 +3,10 @@
  * --------------------------------------------------------------
  * Patches applied:
  * ... (previous patches)
- * 33) APPLIED: Implemented usage-based trial system.
- * - Added `trialSecondsConsumed` to userSchema.
- * - Added `/api/trial/consume` endpoint to track streaming time.
- * - Updated `enforcePaywall` to use consumed seconds instead of account age.
- * 34) APPLIED: Real-time trial expiration.
- * - The `/api/trial/consume` endpoint now returns the user's trial status.
- * - The client app can now react instantly when a trial expires mid-stream.
- * - Added startup logs for critical settings like the paywall status.
+ * 35) APPLIED: Fixed JWT malformed error.
+ * - Consolidated authMiddleware into a single, correct implementation.
+ * - Corrected the argument order in `jwt.verify(token, secret)`.
+ * - Moved JWT_SECRET and authMiddleware definitions to a more logical location.
  */
 
 const express = require('express');
@@ -25,12 +21,12 @@ const crypto = require('crypto');
 require('dotenv').config();
 
 const app = express();
+const JWT_SECRET = process.env.JWT_SECRET || 'your-jwt-secret';
 
 // --- Middleware ------------------------------------------------------------
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
-
 app.set('trust proxy', true);
 
 // --- MongoDB Connection ----------------------------------------------------
@@ -69,7 +65,6 @@ function formatPhone(phone) {
   }
   return phone;
 }
-
 
 // --- Schemas & Models ------------------------------------------------------
 const channelSchema = new mongoose.Schema({
@@ -155,6 +150,24 @@ const Slider = mongoose.model('Slider', sliderSchema);
 const Notification = mongoose.model('Notification', notificationSchema);
 const User = mongoose.model('User', userSchema);
 const Transaction = mongoose.model('Transaction', transactionSchema);
+
+// --- Authentication Middleware (FIXED) -------------------------------------
+function authMiddleware(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Authorization token required' });
+    }
+
+    const token = authHeader.substring(7);
+    const decoded = jwt.verify(token, JWT_SECRET); // Correct order: verify(token, secret)
+    req.user = decoded;
+    next();
+  } catch (error) {
+    console.error('Auth middleware error:', error.message);
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
 
 // --- STATS ROUTE -----------------------------------------------------------
 app.get('/api/stats', async (req, res) => {
@@ -363,12 +376,10 @@ async function initializeDefaultSettings() {
   }
 }
 
-// MODIFIED: Added startup logging for key settings
 initializeDefaultSettings()
   .then(() => hydrateSettingsCache())
   .then(async (count) => {
     console.log(`🚀 Settings cache initialized with ${count} keys (ttl=${settingsCache.ttlMs}ms)`);
-    // --- ADDED: Log key settings on startup for easier debugging ---
     const paywallStatus = await getSetting('paywall_enabled', 'NOT_SET');
     const trialSeconds = await getSetting('trial_seconds', 'NOT_SET');
     console.log('-----------------------------------------');
@@ -886,7 +897,7 @@ async function enforcePaywall(req, res, next) {
 
     let payload;
     try {
-      payload = jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret');
+      payload = jwt.verify(token, JWT_SECRET);
     } catch {
       return res.status(401).json({ error: 'Invalid token.' });
     }
@@ -1174,7 +1185,7 @@ app.post('/api/webhooks/zenopay', async (req, res) => {
 
       const token = jwt.sign(
         { user: { id: userToSign.id } },
-        process.env.JWT_SECRET || 'your_jwt_secret',
+        JWT_SECRET,
         { expiresIn: `${durationDays}d` }
       );
 
@@ -1250,27 +1261,9 @@ app.post('/api/subscribe/mock-complete/:orderId', async (req, res) => {
   }
 });
 
-// --- MODIFIED: Trial consumption endpoint now returns status ---
 const trialConsumptionValidation = Joi.object({
   seconds: Joi.number().integer().min(1).required(),
 });
-
-function authMiddleware(req, res, next) {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Authorization token required' });
-    }
-
-    const token = authHeader.substring(7);
-    const decoded = jwt.verify(process.env.JWT_SECRET || 'your_jwt_secret', token);
-    req.user = decoded;
-    next();
-  } catch (error) {
-    console.error('Auth middleware error:', error.message);
-    return res.status(401).json({ error: 'Invalid or expired token' });
-  }
-}
 
 app.post('/api/trial/consume', authMiddleware, async (req, res) => {
   try {
@@ -1291,14 +1284,13 @@ app.post('/api/trial/consume', authMiddleware, async (req, res) => {
     if (!updatedUser) {
       return res.json({ 
           message: 'No action needed (user is premium or not found).',
-          trial_active: true // A premium user's "trial" is effectively always active
+          trial_active: true
       });
     }
 
     const totalTrialSecondsStr = await getSetting('trial_seconds', '0');
     const totalTrialSeconds = parseInt(totalTrialSecondsStr || '0', 10);
     
-    // The trial is active if the time they have consumed is still LESS than the total time allowed.
     const isTrialStillActive = updatedUser.trialSecondsConsumed < totalTrialSeconds;
 
     console.log(`[TRIAL] User ${userId} consumed ${seconds}s. Total: ${updatedUser.trialSecondsConsumed}/${totalTrialSeconds}. Active: ${isTrialStillActive}`);
@@ -1342,8 +1334,6 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 module.exports = app;
-
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
 app.post('/api/auth/device-login', async (req, res) => {
   try {
@@ -1392,7 +1382,7 @@ app.post('/api/auth/device-login', async (req, res) => {
 });
 
 // --- USER MANAGEMENT ROUTES -----------------------------------------------
-app.get('/api/users', async (req, res) => {
+app.get('/api/users', authMiddleware, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
@@ -1443,7 +1433,7 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
-app.get('/api/users/:id', async (req, res) => {
+app.get('/api/users/:id', authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.params.id).select('-password');
 
@@ -1462,7 +1452,7 @@ const manualUpgradeValidation = Joi.object({
   days: Joi.number().integer().min(1).required(),
 });
 
-app.post('/api/users/:id/upgrade-premium', async (req, res) => {
+app.post('/api/users/:id/upgrade-premium', authMiddleware, async (req, res) => {
   try {
     const { error } = manualUpgradeValidation.validate(req.body);
     if (error) {
@@ -1492,7 +1482,7 @@ app.post('/api/users/:id/upgrade-premium', async (req, res) => {
 
     const token = jwt.sign(
       { user: { id: user.id } },
-      process.env.JWT_SECRET || 'your_jwt_secret',
+      JWT_SECRET,
       { expiresIn: `${days}d` } 
     );
 
@@ -1509,7 +1499,7 @@ app.post('/api/users/:id/upgrade-premium', async (req, res) => {
 });
 
 
-app.put('/api/users/:id', async (req, res) => {
+app.put('/api/users/:id', authMiddleware, async (req, res) => {
   try {
     const { name, phoneNumber, is_premium, subscriptionEndDate } = req.body;
 
@@ -1536,7 +1526,7 @@ app.put('/api/users/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/users/:id', async (req, res) => {
+app.delete('/api/users/:id', authMiddleware, async (req, res) => {
   try {
     const user = await User.findByIdAndDelete(req.params.id);
 
@@ -1565,3 +1555,4 @@ app.get('/api/auth/me', authMiddleware, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch  profile' });
   }
 });
+
