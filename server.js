@@ -3,14 +3,14 @@
  * --------------------------------------------------------------
  * Patches applied:
  * ... (previous patches)
- * 32) APPLIED: Added remote toggle for low-quality streams.
- * - Added `playbackUrlLowQuality` to channelSchema.
- * - Added `forceLowQuality` to default settings.
- * - Patched public channel routes to swap URLs based on the setting.
  * 33) APPLIED: Implemented usage-based trial system.
  * - Added `trialSecondsConsumed` to userSchema.
  * - Added `/api/trial/consume` endpoint to track streaming time.
  * - Updated `enforcePaywall` to use consumed seconds instead of account age.
+ * 34) APPLIED: Real-time trial expiration.
+ * - The `/api/trial/consume` endpoint now returns the user's trial status.
+ * - The client app can now react instantly when a trial expires mid-stream.
+ * - Added startup logs for critical settings like the paywall status.
  */
 
 const express = require('express');
@@ -76,7 +76,7 @@ const channelSchema = new mongoose.Schema({
   name: { type: String, required: true },
   channelId: { type: String, required: true, unique: true },
   playbackUrl: { type: String, required: true },
-  playbackUrlLowQuality: { type: String }, // ✅ PATCH: Added field for low quality stream
+  playbackUrlLowQuality: { type: String }, 
   drm: {
     enabled: { type: Boolean, default: false },
     provider: { type: String, enum: ['clearkey', 'none', 'widevine'], default: 'none' },
@@ -124,20 +124,18 @@ const notificationSchema = new mongoose.Schema({
   sent_at: { type: Date },
 }, { timestamps: true });
 
-// --- PATCH START: Add trialSecondsConsumed to user schema ---
 const userSchema = new mongoose.Schema({
   name: { type: String },
-  installationId: { type: String, unique: true, sparse: true }, // ✅ Main unique identity (UUID)
-  deviceId: { type: String, index: true, sparse: true },        // For analytics/info only
-  phoneNumber: { type: String, unique: true, sparse: true },   // Can be linked to one user
+  installationId: { type: String, unique: true, sparse: true }, 
+  deviceId: { type: String, index: true, sparse: true },        
+  phoneNumber: { type: String, unique: true, sparse: true },   
   is_premium: { type: Boolean, default: false },
   subscriptionEndDate: { type: Date },
   last_login: { type: Date, default: Date.now },
   username: { type: String, sparse: true },
   email: { type: String, sparse: true },
-  trialSecondsConsumed: { type: Number, default: 0 }, // ✅ ADDED THIS FIELD
+  trialSecondsConsumed: { type: Number, default: 0 }, 
 }, { timestamps: true });
-// --- PATCH END ---
 
 const transactionSchema = new mongoose.Schema({
   orderId: { type: String, required: true, unique: true },
@@ -147,8 +145,8 @@ const transactionSchema = new mongoose.Schema({
   price: { type: Number },
   status: { type: String, enum: ['PENDING', 'COMPLETED', 'FAILED', 'CANCELLED', 'EXPIRED'], default: 'PENDING' },
   token: { type: String },
-  deviceId: { type: String }, // For analytics/info only
-  installationId: { type: String }, // The ONLY link to a user
+  deviceId: { type: String },
+  installationId: { type: String },
 }, { timestamps: true });
 
 const Channel = mongoose.model('Channel', channelSchema);
@@ -161,12 +159,10 @@ const Transaction = mongoose.model('Transaction', transactionSchema);
 // --- STATS ROUTE -----------------------------------------------------------
 app.get('/api/stats', async (req, res) => {
   try {
-    // 1. Get current month's transactions
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
 
-    // 2. Aggregate transactions for revenue calculation
     const revenueStats = await Transaction.aggregate([
       {
         $match: {
@@ -186,17 +182,14 @@ app.get('/api/stats', async (req, res) => {
     const monthlyRevenue = revenueStats.length > 0 ? revenueStats[0].totalMonthlyRevenue : 0;
     const monthlyTransactions = revenueStats.length > 0 ? revenueStats[0].transactions : 0;
 
-    // 3. Count users
     const totalUsers = await User.countDocuments();
     const paidUsers = await User.countDocuments({ is_premium: true });
     const freeUsers = totalUsers - paidUsers;
     const activeUsers = await User.countDocuments({ last_login: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } });
 
-    // 4. Count channels
     const totalChannels = await Channel.countDocuments();
     const activeChannels = await Channel.countDocuments({ status: true });
 
-    // 5. Get top 5 channels by views (assuming a 'views' field exists, if not, this will be placeholder data for now)
     const topChannels = await Channel.find({}).sort({ views: -1 }).limit(5).select('name views');
 
     const stats = {
@@ -226,7 +219,7 @@ const channelValidationSchema = Joi.object({
   name: Joi.string().required(),
   channelId: Joi.string().required(),
   playbackUrl: Joi.string().uri().required(),
-  playbackUrlLowQuality: Joi.string().uri().allow(''), // ✅ PATCH: Added validation
+  playbackUrlLowQuality: Joi.string().uri().allow(''),
   drm: Joi.object({
     enabled: Joi.boolean(),
     provider: Joi.string().valid('clearkey', 'none', 'widevine'),
@@ -324,8 +317,8 @@ async function initializeDefaultSettings() {
         { key: 'app_name', value: 'Town Tv Max', description: 'Application name' },
         { key: 'app_version', value: '1.0.0', description: 'Current app version' },
         { key: 'maintenance_mode', value: 'false', description: 'Enable maintenance mode' },
-        { key: 'paywall_enabled', value: 'false', description: 'Enable paywall for streaming' },
-        { key: 'trial_seconds', value: String(60), description: 'Free trial duration in seconds' },
+        { key: 'paywall_enabled', value: 'true', description: 'Enable paywall for streaming' },
+        { key: 'trial_seconds', value: String(60 * 5), description: 'Free trial duration in seconds (e.g., 300 for 5 minutes)' },
         {
           key: 'subscription_packages',
           value: JSON.stringify([
@@ -337,13 +330,12 @@ async function initializeDefaultSettings() {
           description: 'Available subscription packages (JSON format)',
         },
         { key: 'whatsapp_link', value: 'https://wa.me/255745610606', description: 'Customer support WhatsApp link' },
-        { key: 'forceLowQuality', value: 'false', description: 'Force all streams to use the low quality URL' }, // ✅ PATCH: Added new setting
+        { key: 'forceLowQuality', value: 'false', description: 'Force all streams to use the low quality URL' },
       ];
       await Settings.insertMany(defaults);
       console.log('Default settings initialized');
     } else {
-      // ✅ PATCH START: Logic to add missing settings on startup
-      const requiredKeys = ['whatsapp_link', 'forceLowQuality'];
+      const requiredKeys = ['whatsapp_link', 'forceLowQuality', 'paywall_enabled', 'trial_seconds'];
       for (const key of requiredKeys) {
         const settingExists = await Settings.findOne({ key });
         if (!settingExists) {
@@ -354,26 +346,37 @@ async function initializeDefaultSettings() {
             } else if (key === 'forceLowQuality') {
                 value = 'false';
                 description = 'Force all streams to use the low quality URL';
+            } else if (key === 'paywall_enabled') {
+                value = 'true';
+                description = 'Enable paywall for streaming';
+            } else if (key === 'trial_seconds') {
+                value = String(60 * 5);
+                description = 'Free trial duration in seconds';
             }
           await Settings.create({ key, value, description });
           console.log(`Added missing setting: ${key}.`);
         }
       }
-      // ✅ PATCH END
     }
   } catch (error) {
     console.error('Error initializing default settings:', error);
   }
 }
 
+// MODIFIED: Added startup logging for key settings
 initializeDefaultSettings()
   .then(() => hydrateSettingsCache())
-  .then(count => console.log(`🚀 Settings cache initialized with ${count} keys (ttl=${settingsCache.ttlMs}ms)`))
+  .then(async (count) => {
+    console.log(`🚀 Settings cache initialized with ${count} keys (ttl=${settingsCache.ttlMs}ms)`);
+    // --- ADDED: Log key settings on startup for easier debugging ---
+    const paywallStatus = await getSetting('paywall_enabled', 'NOT_SET');
+    const trialSeconds = await getSetting('trial_seconds', 'NOT_SET');
+    console.log('-----------------------------------------');
+    console.log(`🟢 Paywall Enabled: ${paywallStatus}`);
+    console.log(`🟢 Trial Duration (sec): ${trialSeconds}`);
+    console.log('-----------------------------------------');
+  })
   .catch(err => console.error('Initial settings cache hydrate failed:', err.message));
-
-// --- PATCH: REMOVED LEGACY /api/users/log-install ENDPOINT ---
-// This endpoint was based on deviceId and is no longer needed.
-// All user creation is now handled by /api/auth/device-login.
 
 
 // --- CHANNEL ROUTES --------------------------------------------------------
@@ -382,12 +385,10 @@ app.get('/api/channels', async (req, res) => {
     const { search, mainCategory, subCategory } = req.query;
     let query = {};
 
-    // Handle search query
     if (search) {
-      query.name = { $regex: search, $options: 'i' }; // Case-insensitive search on the 'name' field
+      query.name = { $regex: search, $options: 'i' };
     }
 
-    // Handle category filters
     if (mainCategory) {
       query.mainCategory = mainCategory;
     }
@@ -565,17 +566,10 @@ app.post('/api/settings', async (req, res) => {
   }
 });
 
-// lib/server.js
-
 app.put('/api/settings/:id', async (req, res) => {
   try {
     const { value, description } = req.body;
     
-    // NEW: Add this line to debug the incoming value
-    console.log('--- DEBUG: Received value to update ---');
-    console.log(value);
-    console.log('------------------------------------');
-
     const updateData = {};
     if (value !== undefined) updateData.value = value;
     if (description !== undefined) updateData.description = description;
@@ -587,10 +581,6 @@ app.put('/api/settings/:id', async (req, res) => {
 
     res.json({ message: 'Setting updated successfully', setting: transformDoc(updatedSetting) });
   } catch (error) {
-    // Also log the error if one occurs
-    console.error('--- DEBUG: Error during setting update ---');
-    console.error(error);
-    console.error('----------------------------------------');
     res.status(500).json({ error: 'Failed to update setting' });
   }
 });
@@ -784,16 +774,6 @@ app.put('/api/notifications/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/notifications/:id', async (req, res) => {
-  try {
-    const deletedNotification = await Notification.findByIdAndDelete(req.params.id);
-    if (!deletedNotification) return res.status(404).json({ error: 'Notification not found' });
-    res.json({ message: 'Notification deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to delete notification' });
-  }
-});
-
 app.post('/api/notifications/:id/send', async (req, res) => {
   try {
     const notification = await Notification.findById(req.params.id);
@@ -821,65 +801,6 @@ app.post('/api/notifications/:id/send', async (req, res) => {
   }
 });
 
-// --- STATS ROUTES (This seems duplicated, keeping the more detailed one from the top) ---
-// The stats route at the top of the file is more comprehensive. This one is less detailed.
-// To avoid conflicts, I'll comment out the less detailed one.
-/*
-app.get('/api/stats', async (req, res) => {
-  try {
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const startOfWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const startOfMonth = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-    const totalUsers = await User.countDocuments();
-    const paidUsers = await User.countDocuments({ is_premium: true });
-    const freeUsers = totalUsers - paidUsers;
-    const totalChannels = await Channel.countDocuments();
-    const activeChannels = await Channel.countDocuments({ status: true });
-
-    const newUsersToday = await User.countDocuments({ createdAt: { $gte: startOfToday } });
-    const newUsersThisWeek = await User.countDocuments({ createdAt: { $gte: startOfWeek } });
-    const newUsersThisMonth = await User.countDocuments({ createdAt: { $gte: startOfMonth } });
-
-    const activeUsers = Math.floor(totalUsers * 0.3);
-
-    const subscriptionPrice = 9.99;
-    const revenue = {
-      today: paidUsers * subscriptionPrice * 0.1,
-      thisWeek: paidUsers * subscriptionPrice * 0.7,
-      thisMonth: paidUsers * subscriptionPrice * 3.0,
-      total: paidUsers * subscriptionPrice * 12.0,
-    };
-
-    const channels = await Channel.find({ status: true }).limit(5);
-    const topChannels = channels.map((channel, index) => ({
-      id: channel._id.toString(),
-      name: channel.name,
-      viewCount: Math.max(1000 - index * 200, 100),
-      uniqueViewers: Math.max(500 - index * 100, 50),
-    }));
-
-    const userGrowth = [];
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
-      userGrowth.push({
-        date: date.toISOString().split('T')[0],
-        totalUsers: Math.max(totalUsers - i * 10, 0),
-        paidUsers: Math.max(paidUsers - i * 2, 0),
-      });
-    }
-
-    res.json({
-      totalUsers, paidUsers, freeUsers, activeUsers, newUsersToday, newUsersThisWeek,
-      newUsersThisMonth, totalChannels, activeChannels, revenue, topChannels, userGrowth,
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch stats' });
-  }
-});
-*/
-
 app.get('/api/stats/dashboard', async (req, res) => {
   try {
     const totalUsers = await User.countDocuments();
@@ -898,7 +819,7 @@ app.get('/api/stats/dashboard', async (req, res) => {
 app.get('/api/transactions', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20; // Increased limit for practicality
+    const limit = parseInt(req.query.limit) || 20;
     const status = req.query.status;
     const search = req.query.search || '';
     
@@ -943,8 +864,6 @@ app.get('/api/transactions', async (req, res) => {
   }
 });
 
-// --- PATCH START: Update paywall to be usage-based ---
-// This entire function is replaced with the new logic.
 async function enforcePaywall(req, res, next) {
   try {
     const paywallEnabledStr = await getSetting('paywall_enabled', 'false');
@@ -982,7 +901,6 @@ async function enforcePaywall(req, res, next) {
       return next();
     }
 
-    // THIS IS THE NEW LOGIC
     if (totalTrialSeconds > 0) {
       const consumed = user.trialSecondsConsumed || 0;
       if (consumed < totalTrialSeconds) {
@@ -993,19 +911,16 @@ async function enforcePaywall(req, res, next) {
     }
 
     console.log('❌ Paywall blocking access (Trial consumed or not available)');
-    // Use a more specific error message for the client app
     return res.status(403).json({ error: 'Subscription required. Please subscribe.' });
   } catch (err) {
     console.error('Paywall enforcement error:', err);
     res.status(500).json({ error: 'Paywall check failed.' });
   }
 }
-// --- PATCH END ---
 
 // --- PUBLIC ROUTES (paywall-protected where relevant) ----------------------
 app.get('/api/public/channels', async (req, res) => {
   try {
-    // Only look for the new category fields
     const { mainCategory, subCategory } = req.query; 
     let query = { status: true };
     
@@ -1016,24 +931,21 @@ app.get('/api/public/channels', async (req, res) => {
       query.subCategory = subCategory;
     }
     
-    // ✅ PATCH START: Logic for forcing low quality streams
     const channels = await Channel.find(query).sort({ 
       position: 1,
       createdAt: -1
-    }).lean(); // Use .lean() for faster modification
+    }).lean();
     
     const forceLowQualitySetting = await getSetting('forceLowQuality', 'false');
     const forceLow = forceLowQualitySetting === 'true';
 
     if (forceLow) {
       channels.forEach(channel => {
-        // If a low quality URL exists, swap it with the main one
         if (channel.playbackUrlLowQuality) {
           channel.playbackUrl = channel.playbackUrlLowQuality;
         }
       });
     }
-    // ✅ PATCH END
 
     res.json({ channels: transformArray(channels) });
   } catch (error) {
@@ -1044,11 +956,10 @@ app.get('/api/public/channels', async (req, res) => {
 
 app.get('/api/public/channels/:channelId', enforcePaywall, async (req, res) => {
   try {
-    // ✅ PATCH START: Logic for forcing low quality streams
     const channel = await Channel.findOne({ 
       channelId: req.params.channelId, 
       status: true 
-    }).lean(); // Use .lean() for faster modification
+    }).lean();
     
     if (!channel) return res.status(404).json({ error: 'Channel not found' });
     
@@ -1058,7 +969,6 @@ app.get('/api/public/channels/:channelId', enforcePaywall, async (req, res) => {
     if (forceLow && channel.playbackUrlLowQuality) {
       channel.playbackUrl = channel.playbackUrlLowQuality;
     }
-    // ✅ PATCH END
 
     res.json({ channel: transformDoc(channel) });
   } catch (error) {
@@ -1094,10 +1004,8 @@ app.get('/api/public/notifications', async (req, res) => {
 // --- SUBSCRIBE & PAYMENT ---------------------------------------------------
 app.post('/api/subscribe/initiate-payment', async (req, res) => {
   try {
-    // --- PATCH: installationId is now the most critical piece of data ---
     const { name, phoneNumber, package: packageTitle, installationId } = req.body;
     
-    // Ensure the client has sent the installationId
     if (!name || !phoneNumber || !packageTitle || !installationId) {
       return res.status(400).json({ error: 'Name, phone number, package, and installationId are required.' });
     }
@@ -1129,8 +1037,7 @@ app.post('/api/subscribe/initiate-payment', async (req, res) => {
       packageTitle,
       price: amount,
       status: 'PENDING',
-      installationId: installationId, // This is the crucial link to the user
-      // deviceId is no longer needed to find the user
+      installationId: installationId,
     });
     await tx.save();
 
@@ -1182,7 +1089,6 @@ app.post('/api/subscribe/initiate-payment', async (req, res) => {
   }
 });
 
-// --- PATCH START: Webhook now ONLY uses installationId ---
 app.post('/api/webhooks/zenopay', async (req, res) => {
   try {
     const { order_id, payment_status } = req.body || {};
@@ -1213,8 +1119,6 @@ app.post('/api/webhooks/zenopay', async (req, res) => {
 
       const now = new Date();
       
-      // Find the user ONLY by the installationId from the transaction.
-      // All fallback logic has been removed.
       const existingUser = tx.installationId 
         ? await User.findOne({ installationId: tx.installationId }) 
         : null;
@@ -1237,8 +1141,6 @@ app.post('/api/webhooks/zenopay', async (req, res) => {
         existingUser.subscriptionEndDate = newEndDate;
         if (tx.name) existingUser.name = tx.name;
         
-        // This logic remains to prevent a crash if a new user tries to pay
-        // with a phone number that's already linked to a different account.
         let shouldUpdatePhoneNumber = !existingUser.phoneNumber && tx.phoneNumber;
         if (shouldUpdatePhoneNumber) {
             const phoneOwner = await User.findOne({ phoneNumber: tx.phoneNumber });
@@ -1256,8 +1158,6 @@ app.post('/api/webhooks/zenopay', async (req, res) => {
 
         userToSign = existingUser;
       } else {
-        // This block now only runs if the installationId from the payment
-        // does not match any user in the database. This implies a new user.
         console.log(`Creating new premium user for installationId ${tx.installationId}`);
         const newEndDate = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
         
@@ -1295,7 +1195,6 @@ app.post('/api/webhooks/zenopay', async (req, res) => {
     res.status(500).send("Error processing webhook");
   }
 });
-// --- PATCH END ---
 
 
 app.get('/api/subscribe/status/:orderId', async (req, res) => {
@@ -1305,12 +1204,9 @@ app.get('/api/subscribe/status/:orderId', async (req, res) => {
     if (!tx) return res.status(404).json({ status: 'NOT_FOUND' });
 
     if (tx.status === 'COMPLETED') {
-      // --- PATCH START: Status check now ONLY uses installationId ---
-      // Find user exclusively by the installationId stored in the transaction.
       const user = tx.installationId 
         ? await User.findOne({ installationId: tx.installationId }) 
         : null;
-      // --- PATCH END ---
 
       return res.json({ status: 'COMPLETED', token: tx.token, user: transformDoc(user) });
     }
@@ -1354,10 +1250,27 @@ app.post('/api/subscribe/mock-complete/:orderId', async (req, res) => {
   }
 });
 
-// --- PATCH START: Add new endpoint for tracking trial consumption ---
+// --- MODIFIED: Trial consumption endpoint now returns status ---
 const trialConsumptionValidation = Joi.object({
   seconds: Joi.number().integer().min(1).required(),
 });
+
+function authMiddleware(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Authorization token required' });
+    }
+
+    const token = authHeader.substring(7);
+    const decoded = jwt.verify(process.env.JWT_SECRET || 'your_jwt_secret', token);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    console.error('Auth middleware error:', error.message);
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
 
 app.post('/api/trial/consume', authMiddleware, async (req, res) => {
   try {
@@ -1369,22 +1282,31 @@ app.post('/api/trial/consume', authMiddleware, async (req, res) => {
     const userId = req.user.user.id;
     const { seconds } = req.body;
 
-    // Use findOneAndUpdate with $inc for an atomic and efficient update
     const updatedUser = await User.findOneAndUpdate(
-      { _id: userId, is_premium: false }, // Only update if the user is NOT premium
+      { _id: userId, is_premium: false },
       { $inc: { trialSecondsConsumed: seconds } },
-      { new: true } // Return the updated document
+      { new: true }
     );
 
     if (!updatedUser) {
-      // This can happen if the user is already premium or doesn't exist.
-      // In either case, it's fine. We just don't need to track trial time.
-      return res.json({ message: 'No action needed (user is premium or not found).' });
+      return res.json({ 
+          message: 'No action needed (user is premium or not found).',
+          trial_active: true // A premium user's "trial" is effectively always active
+      });
     }
+
+    const totalTrialSecondsStr = await getSetting('trial_seconds', '0');
+    const totalTrialSeconds = parseInt(totalTrialSecondsStr || '0', 10);
+    
+    // The trial is active if the time they have consumed is still LESS than the total time allowed.
+    const isTrialStillActive = updatedUser.trialSecondsConsumed < totalTrialSeconds;
+
+    console.log(`[TRIAL] User ${userId} consumed ${seconds}s. Total: ${updatedUser.trialSecondsConsumed}/${totalTrialSeconds}. Active: ${isTrialStillActive}`);
 
     res.json({
       message: 'Trial consumption recorded.',
       trialSecondsConsumed: updatedUser.trialSecondsConsumed,
+      trial_active: isTrialStillActive,
     });
 
   } catch (err) {
@@ -1392,7 +1314,6 @@ app.post('/api/trial/consume', authMiddleware, async (req, res) => {
     res.status(500).json({ error: 'Failed to record trial consumption.' });
   }
 });
-// --- PATCH END ---
 
 
 // --- Health & Server Start -------------------------------------------------
@@ -1435,15 +1356,13 @@ app.post('/api/auth/device-login', async (req, res) => {
     let user = await User.findOne({ installationId });
 
     if (user) {
-      // User exists, update last login and deviceId (for analytics)
       user.deviceId = deviceId; 
       user.last_login = new Date();
       await user.save();
     } else {
-      // This is a new installation, create a new user.
       user = new User({
         installationId,
-        deviceId, // Stored for info, not for auth
+        deviceId,
         last_login: new Date(),
         is_premium: false
       });
@@ -1466,30 +1385,11 @@ app.post('/api/auth/device-login', async (req, res) => {
   } catch (error) {
     console.error('Unified device login error:', error);
     if (error.code === 11000) {
-      // This will now only trigger if two requests try to create a user with the same
-      // installationId at the exact same time. Highly unlikely, but good to handle.
       return res.status(500).json({ error: 'Duplicate key error. Please try again.' });
     }
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-
-function authMiddleware(req, res, next) {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Authorization token required' });
-    }
-
-    const token = authHeader.substring(7);
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded;
-    next();
-  } catch (error) {
-    console.error('Auth middleware error:', error);
-    return res.status(401).json({ error: 'Invalid or expired token' });
-  }
-}
 
 // --- USER MANAGEMENT ROUTES -----------------------------------------------
 app.get('/api/users', async (req, res) => {
@@ -1508,7 +1408,6 @@ app.get('/api/users', async (req, res) => {
     }
 
     if (search) {
-      // Search remains flexible for admin purposes
       filter.$or = [
         { name: { $regex: search, $options: 'i' } },
         { phoneNumber: { $regex: search, $options: 'i' } },
