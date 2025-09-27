@@ -7,6 +7,10 @@
  * - Added `playbackUrlLowQuality` to channelSchema.
  * - Added `forceLowQuality` to default settings.
  * - Patched public channel routes to swap URLs based on the setting.
+ * 33) APPLIED: Implemented usage-based trial system.
+ * - Added `trialSecondsConsumed` to userSchema.
+ * - Added `/api/trial/consume` endpoint to track streaming time.
+ * - Updated `enforcePaywall` to use consumed seconds instead of account age.
  */
 
 const express = require('express');
@@ -120,6 +124,7 @@ const notificationSchema = new mongoose.Schema({
   sent_at: { type: Date },
 }, { timestamps: true });
 
+// --- PATCH START: Add trialSecondsConsumed to user schema ---
 const userSchema = new mongoose.Schema({
   name: { type: String },
   installationId: { type: String, unique: true, sparse: true }, // ✅ Main unique identity (UUID)
@@ -130,7 +135,9 @@ const userSchema = new mongoose.Schema({
   last_login: { type: Date, default: Date.now },
   username: { type: String, sparse: true },
   email: { type: String, sparse: true },
+  trialSecondsConsumed: { type: Number, default: 0 }, // ✅ ADDED THIS FIELD
 }, { timestamps: true });
+// --- PATCH END ---
 
 const transactionSchema = new mongoose.Schema({
   orderId: { type: String, required: true, unique: true },
@@ -213,9 +220,6 @@ app.get('/api/stats', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch dashboard stats' });
   }
 });
-
-
-
 
 // --- Validation Schemas ----------------------------------------------------
 const channelValidationSchema = Joi.object({
@@ -817,7 +821,10 @@ app.post('/api/notifications/:id/send', async (req, res) => {
   }
 });
 
-// --- STATS ROUTES ----------------------------------------------------------
+// --- STATS ROUTES (This seems duplicated, keeping the more detailed one from the top) ---
+// The stats route at the top of the file is more comprehensive. This one is less detailed.
+// To avoid conflicts, I'll comment out the less detailed one.
+/*
 app.get('/api/stats', async (req, res) => {
   try {
     const now = new Date();
@@ -871,6 +878,7 @@ app.get('/api/stats', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch stats' });
   }
 });
+*/
 
 app.get('/api/stats/dashboard', async (req, res) => {
   try {
@@ -935,16 +943,17 @@ app.get('/api/transactions', async (req, res) => {
   }
 });
 
-// --- Enhanced Paywall Middleware (uses settings cache) --------------------
+// --- PATCH START: Update paywall to be usage-based ---
+// This entire function is replaced with the new logic.
 async function enforcePaywall(req, res, next) {
   try {
     const paywallEnabledStr = await getSetting('paywall_enabled', 'false');
-    const trialSecondsStr = await getSetting('trial_seconds', '0');
+    const totalTrialSecondsStr = await getSetting('trial_seconds', '0');
 
     const paywallEnabled = paywallEnabledStr === 'true';
-    const trialSeconds = parseInt(trialSecondsStr || '0', 10);
+    const totalTrialSeconds = parseInt(totalTrialSecondsStr || '0', 10);
 
-    console.log(`🔒 Paywall check: enabled=${paywallEnabled}, trial=${trialSeconds}s`);
+    console.log(`🔒 Paywall check: enabled=${paywallEnabled}, totalTrial=${totalTrialSeconds}s`);
 
     if (!paywallEnabled) {
       console.log('✅ Paywall disabled - allowing access');
@@ -953,7 +962,6 @@ async function enforcePaywall(req, res, next) {
 
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) {
-      console.log('❌ No token provided');
       return res.status(401).json({ error: 'Paywall enabled. Please log in.' });
     }
 
@@ -961,14 +969,11 @@ async function enforcePaywall(req, res, next) {
     try {
       payload = jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret');
     } catch {
-      console.log('❌ Invalid token');
       return res.status(401).json({ error: 'Invalid token.' });
     }
 
-    const userId = payload.user?.id;
-    const user = await User.findById(userId);
+    const user = await User.findById(payload.user?.id);
     if (!user) {
-      console.log('❌ User not found');
       return res.status(401).json({ error: 'User not found.' });
     }
 
@@ -977,21 +982,25 @@ async function enforcePaywall(req, res, next) {
       return next();
     }
 
-    if (trialSeconds > 0) {
-      const accountAgeSeconds = (Date.now() - user.createdAt.getTime()) / 1000;
-      if (accountAgeSeconds <= trialSeconds) {
-        console.log(`✅ Trial user - allowing access (${Math.ceil(trialSeconds - accountAgeSeconds)}s remaining)`);
+    // THIS IS THE NEW LOGIC
+    if (totalTrialSeconds > 0) {
+      const consumed = user.trialSecondsConsumed || 0;
+      if (consumed < totalTrialSeconds) {
+        const remaining = totalTrialSeconds - consumed;
+        console.log(`✅ Trial user - allowing access (${remaining}s remaining)`);
         return next();
       }
     }
 
-    console.log('❌ Paywall blocking access');
-    return res.status(403).json({ error: 'Paywall active. Please subscribe.' });
+    console.log('❌ Paywall blocking access (Trial consumed or not available)');
+    // Use a more specific error message for the client app
+    return res.status(403).json({ error: 'Subscription required. Please subscribe.' });
   } catch (err) {
     console.error('Paywall enforcement error:', err);
     res.status(500).json({ error: 'Paywall check failed.' });
   }
 }
+// --- PATCH END ---
 
 // --- PUBLIC ROUTES (paywall-protected where relevant) ----------------------
 app.get('/api/public/channels', async (req, res) => {
@@ -1344,6 +1353,47 @@ app.post('/api/subscribe/mock-complete/:orderId', async (req, res) => {
     }
   }
 });
+
+// --- PATCH START: Add new endpoint for tracking trial consumption ---
+const trialConsumptionValidation = Joi.object({
+  seconds: Joi.number().integer().min(1).required(),
+});
+
+app.post('/api/trial/consume', authMiddleware, async (req, res) => {
+  try {
+    const { error } = trialConsumptionValidation.validate(req.body);
+    if (error) {
+      return res.status(400).json({ error: error.details[0].message });
+    }
+
+    const userId = req.user.user.id;
+    const { seconds } = req.body;
+
+    // Use findOneAndUpdate with $inc for an atomic and efficient update
+    const updatedUser = await User.findOneAndUpdate(
+      { _id: userId, is_premium: false }, // Only update if the user is NOT premium
+      { $inc: { trialSecondsConsumed: seconds } },
+      { new: true } // Return the updated document
+    );
+
+    if (!updatedUser) {
+      // This can happen if the user is already premium or doesn't exist.
+      // In either case, it's fine. We just don't need to track trial time.
+      return res.json({ message: 'No action needed (user is premium or not found).' });
+    }
+
+    res.json({
+      message: 'Trial consumption recorded.',
+      trialSecondsConsumed: updatedUser.trialSecondsConsumed,
+    });
+
+  } catch (err) {
+    console.error('Trial consumption error:', err);
+    res.status(500).json({ error: 'Failed to record trial consumption.' });
+  }
+});
+// --- PATCH END ---
+
 
 // --- Health & Server Start -------------------------------------------------
 app.get('/health', (req, res) => res.json({ ok: true, app: 'Town Tv Max' }));
