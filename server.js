@@ -1432,18 +1432,40 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
+// In server.js
+
 app.get('/api/users/:id', async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).select('-password');
+    const { id } = req.params;
+
+    // This new query intelligently searches for the user by either
+    // the database _id OR the installationId.
+    const query = mongoose.Types.ObjectId.isValid(id)
+      ? { $or: [{ _id: id }, { installationId: id }] }
+      : { installationId: id };
+
+    const user = await User.findOne(query).select('-password');
 
     if (!user) {
+      // Now, if a user isn't found, it's a genuine 404.
       return res.status(404).json({ error: 'User not found' });
     }
 
-    res.json({ user: transformDoc(user) });
+    // We also need to fetch the user's transactions for the detail screen
+    const transactions = await Transaction.find({ installationId: user.installationId })
+      .sort({ createdAt: -1 })
+      .limit(50); // Limit to the last 50 transactions
+
+    const userDetail = {
+      user: transformDoc(user),
+      transactions: transformArray(transactions),
+    };
+
+    res.json(userDetail);
+
   } catch (error) {
-    console.error('Get user error:', error);
-    res.status(500).json({ error: 'Failed to fetch user' });
+    console.error('Get user detail error:', error);
+    res.status(500).json({ error: 'Failed to fetch user details' });
   }
 });
 
