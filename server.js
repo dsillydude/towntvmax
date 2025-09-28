@@ -170,9 +170,6 @@ function authMiddleware(req, res, next) {
 }
 
 // --- STATS ROUTE -----------------------------------------------------------
-// In server.js
-
-// --- STATS ROUTE (NEW ADVANCED VERSION) ------------------------------------
 app.get('/api/stats', async (req, res) => {
   try {
     // --- Define Rolling Time Periods ---
@@ -190,7 +187,11 @@ app.get('/api/stats', async (req, res) => {
       activeUsers,
       totalChannels,
       activeChannels,
-      topChannels
+      topChannels,
+      // <<-- PATCH START: Added queries for new premium users -->>
+      newPremiumLast24Hours,
+      newPremiumLast7Days,
+      newPremiumLast30Days,
     ] = await Promise.all([
       // 1. Get Revenue Stats
       Transaction.aggregate([
@@ -228,11 +229,19 @@ app.get('/api/stats', async (req, res) => {
       User.countDocuments({ last_login: { $gte: last30Days } }), // Active in last 30 days
       Channel.countDocuments(),
       Channel.countDocuments({ status: true }),
-      Channel.find({}).sort({ viewCount: -1 }).select('name viewCount')
+      Channel.find({}).sort({ viewCount: -1 }).select('name viewCount'),
+      // <<-- New Premium User Queries -->>
+      User.countDocuments({ is_premium: true, createdAt: { $gte: last24Hours } }),
+      User.countDocuments({ is_premium: true, createdAt: { $gte: last7Days } }),
+      User.countDocuments({ is_premium: true, createdAt: { $gte: last30Days } }),
     ]);
+    // <<-- PATCH END -->>
 
     // --- Prepare the 30-Day User Growth Chart Data ---
     const userGrowthChartData = [];
+    // <<-- PATCH START: Added premiumUserGrowthChartData logic -->>
+    const premiumUserGrowthChartData = [];
+    // <<-- PATCH END -->>
     for (let i = 29; i >= 0; i--) {
         const date = new Date();
         date.setDate(date.getDate() - i);
@@ -246,6 +255,12 @@ app.get('/api/stats', async (req, res) => {
             totalUsers: totalUsersOnDay,
             paidUsers: paidUsersOnDay,
         });
+        // <<-- PATCH START: Push only paid users for the separate premium chart -->>
+        premiumUserGrowthChartData.push({
+          date: new Date(date.setHours(0,0,0,0)).toISOString().split('T')[0],
+          paidUsers: paidUsersOnDay,
+        });
+        // <<-- PATCH END -->>
     }
 
     // --- Assemble Final Response ---
@@ -265,8 +280,16 @@ app.get('/api/stats', async (req, res) => {
         newLast24Hours: userGrowthStats[0].newLast24Hours[0]?.count || 0,
         newLast7Days: userGrowthStats[0].newLast7Days[0]?.count || 0,
         newLast30Days: userGrowthStats[0].newLast30Days[0]?.count || 0,
+        // <<-- PATCH START: Added new premium user counts to response -->>
+        newPremiumLast24Hours: newPremiumLast24Hours,
+        newPremiumLast7Days: newPremiumLast7Days,
+        newPremiumLast30Days: newPremiumLast30Days,
+        // <<-- PATCH END -->>
       },
       userGrowthChartData,
+      // <<-- PATCH START: Added premiumUserGrowthChartData to response -->>
+      premiumUserGrowthChartData,
+      // <<-- PATCH END -->>
       topChannels: topChannels.map(c => ({ name: c.name, viewCount: c.viewCount || 0 }))
     };
 
