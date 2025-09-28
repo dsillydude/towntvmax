@@ -231,7 +231,7 @@ app.get('/api/stats', async (req, res) => {
     ]);
     
     // <<-- PATCH C.1: UPDATED stats query -->>
-    const topChannels = await Channel.find({}).sort({ viewCount: -1 }).limit(5).select('name viewCount');
+    const topChannels = await Channel.find({}).sort({ viewCount: -1 }).limit(10).select('name viewCount');
 
     const stats = {
       totalUsers,
