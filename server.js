@@ -170,69 +170,85 @@ function authMiddleware(req, res, next) {
 }
 
 // --- STATS ROUTE -----------------------------------------------------------
+// In server.js
+
+// --- STATS ROUTE (NEW ADVANCED VERSION) ------------------------------------
 app.get('/api/stats', async (req, res) => {
   try {
+    // --- Define Rolling Time Periods ---
     const now = new Date();
-    const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-    const weekStartUtc = new Date(todayUtc);
-    weekStartUtc.setUTCDate(weekStartUtc.getUTCDate() - weekStartUtc.getUTCDay());
-    const monthStartUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const last24Hours = new Date(now.getTime() - (24 * 60 * 60 * 1000));
+    const last7Days = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
+    const last30Days = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
 
-    const revenueData = await Transaction.aggregate([
-      { $match: { status: 'COMPLETED' } },
-      {
-        $facet: {
-          "daily": [
-            { $match: { createdAt: { $gte: todayUtc } } },
-            { $group: { _id: null, total: { $sum: '$price' } } }
-          ],
-          "weekly": [
-            { $match: { createdAt: { $gte: weekStartUtc } } },
-            { $group: { _id: null, total: { $sum: '$price' } } }
-          ],
-          "monthly": [
-            { $match: { createdAt: { $gte: monthStartUtc } } },
-            { $group: { _id: null, total: { $sum: '$price' } } }
-          ]
+    // --- Run All Database Queries in Parallel for Speed ---
+    const [
+      revenueStats,
+      userGrowthStats,
+      totalUsers,
+      paidUsers,
+      activeUsers,
+      totalChannels,
+      activeChannels,
+      topChannels
+    ] = await Promise.all([
+      // 1. Get Revenue Stats
+      Transaction.aggregate([
+        { $match: { status: 'COMPLETED' } },
+        {
+          $facet: {
+            "last24Hours": [
+              { $match: { createdAt: { $gte: last24Hours } } },
+              { $group: { _id: null, total: { $sum: '$price' } } }
+            ],
+            "last7Days": [
+              { $match: { createdAt: { $gte: last7Days } } },
+              { $group: { _id: null, total: { $sum: '$price' } } }
+            ],
+            "last30Days": [
+              { $match: { createdAt: { $gte: last30Days } } },
+              { $group: { _id: null, total: { $sum: '$price' } } }
+            ]
+          }
         }
-      }
+      ]),
+      // 2. Get New User Signup Stats
+      User.aggregate([
+        {
+          $facet: {
+            "newLast24Hours": [{ $match: { createdAt: { $gte: last24Hours } } }, { $count: "count" }],
+            "newLast7Days": [{ $match: { createdAt: { $gte: last7Days } } }, { $count: "count" }],
+            "newLast30Days": [{ $match: { createdAt: { $gte: last30Days } } }, { $count: "count" }]
+          }
+        }
+      ]),
+      // 3. Get General Stats
+      User.countDocuments(),
+      User.countDocuments({ is_premium: true }),
+      User.countDocuments({ last_login: { $gte: last30Days } }), // Active in last 30 days
+      Channel.countDocuments(),
+      Channel.countDocuments({ status: true }),
+      Channel.find({}).sort({ viewCount: -1 }).select('name viewCount')
     ]);
 
-    const dailyRevenue = revenueData[0].daily[0]?.total || 0;
-    const weeklyRevenue = revenueData[0].weekly[0]?.total || 0;
-    const monthlyRevenue = revenueData[0].monthly[0]?.total || 0;
+    // --- Prepare the 30-Day User Growth Chart Data ---
+    const userGrowthChartData = [];
+    for (let i = 29; i >= 0; i--) {
+        const date = new Date();
+        date.setDate(date.getDate() - i);
+        const dayEnd = new Date(date.setHours(23, 59, 59, 999));
 
-    const userGrowthPromises = [];
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date();
-      date.setUTCDate(date.getUTCDate() - i);
-      const dayEnd = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59, 59, 999));
-
-      const dayPromise = (async () => {
         const totalUsersOnDay = await User.countDocuments({ createdAt: { $lte: dayEnd } });
         const paidUsersOnDay = await User.countDocuments({ createdAt: { $lte: dayEnd }, is_premium: true });
-        const startOfDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-        return {
-          date: startOfDay.toISOString().split('T')[0],
-          totalUsers: totalUsersOnDay,
-          paidUsers: paidUsersOnDay,
-        };
-      })();
-      userGrowthPromises.push(dayPromise);
+
+        userGrowthChartData.push({
+            date: new Date(date.setHours(0,0,0,0)).toISOString().split('T')[0],
+            totalUsers: totalUsersOnDay,
+            paidUsers: paidUsersOnDay,
+        });
     }
-    const userGrowthData = await Promise.all(userGrowthPromises);
 
-    const [totalUsers, paidUsers, activeUsers, totalChannels, activeChannels] = await Promise.all([
-        User.countDocuments(),
-        User.countDocuments({ is_premium: true }),
-        User.countDocuments({ last_login: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } }),
-        Channel.countDocuments(),
-        Channel.countDocuments({ status: true })
-    ]);
-    
-    // <<-- PATCH C.1: UPDATED stats query -->>
-    const topChannels = await Channel.find({}).sort({ viewCount: -1 }).limit(10).select('name viewCount');
-
+    // --- Assemble Final Response ---
     const stats = {
       totalUsers,
       paidUsers,
@@ -241,12 +257,16 @@ app.get('/api/stats', async (req, res) => {
       totalChannels,
       activeChannels,
       revenue: {
-        daily: dailyRevenue,
-        weekly: weeklyRevenue,
-        monthly: monthlyRevenue,
+        last24Hours: revenueStats[0].last24Hours[0]?.total || 0,
+        last7Days: revenueStats[0].last7Days[0]?.total || 0,
+        last30Days: revenueStats[0].last30Days[0]?.total || 0,
       },
-      userGrowth: userGrowthData,
-      // <<-- PATCH C.2: UPDATED stats mapping -->>
+      userGrowth: {
+        newLast24Hours: userGrowthStats[0].newLast24Hours[0]?.count || 0,
+        newLast7Days: userGrowthStats[0].newLast7Days[0]?.count || 0,
+        newLast30Days: userGrowthStats[0].newLast30Days[0]?.count || 0,
+      },
+      userGrowthChartData,
       topChannels: topChannels.map(c => ({ name: c.name, viewCount: c.viewCount || 0 }))
     };
 
