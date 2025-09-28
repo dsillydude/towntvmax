@@ -169,29 +169,37 @@ function authMiddleware(req, res, next) {
 
 // --- STATS ROUTE -----------------------------------------------------------
 // --- STATS ROUTE (IMPROVED VERSION) ----------------------------------------
+// --- STATS ROUTE (IMPROVED WITH TIMEZONE FIX) ------------------------------
 app.get('/api/stats', async (req, res) => {
   try {
+    // --- FIX APPLIED HERE: Using UTC for all date calculations ---
     const now = new Date();
-    const todayStart = new Date(now.setHours(0, 0, 0, 0));
-    const weekStart = new Date(todayStart);
-    weekStart.setDate(weekStart.getDate() - weekStart.getDay()); // Start of the current week (Sunday)
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    // Get the start of today in UTC
+    const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 
-    // 1. Calculate Revenue for all periods in one go
+    // Calculate the start of the week (last Sunday) in UTC
+    const weekStartUtc = new Date(todayUtc);
+    weekStartUtc.setUTCDate(weekStartUtc.getUTCDate() - weekStartUtc.getUTCDay());
+
+    // Calculate the start of the month in UTC
+    const monthStartUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    // --- END OF FIX ---
+
+    // 1. Calculate Revenue for all periods efficiently in one query
     const revenueData = await Transaction.aggregate([
       { $match: { status: 'COMPLETED' } },
       {
         $facet: {
           "daily": [
-            { $match: { createdAt: { $gte: todayStart } } },
+            { $match: { createdAt: { $gte: todayUtc } } },
             { $group: { _id: null, total: { $sum: '$price' } } }
           ],
           "weekly": [
-            { $match: { createdAt: { $gte: weekStart } } },
+            { $match: { createdAt: { $gte: weekStartUtc } } },
             { $group: { _id: null, total: { $sum: '$price' } } }
           ],
           "monthly": [
-            { $match: { createdAt: { $gte: monthStart } } },
+            { $match: { createdAt: { $gte: monthStartUtc } } },
             { $group: { _id: null, total: { $sum: '$price' } } }
           ]
         }
@@ -202,34 +210,39 @@ app.get('/api/stats', async (req, res) => {
     const weeklyRevenue = revenueData[0].weekly[0]?.total || 0;
     const monthlyRevenue = revenueData[0].monthly[0]?.total || 0;
 
-    // 2. Get User Growth data for the last 7 days
-    const userGrowthData = [];
+    // 2. Calculate User Growth data for the last 7 days
+    const userGrowthPromises = [];
     for (let i = 6; i >= 0; i--) {
       const date = new Date();
-      date.setDate(date.getDate() - i);
-      const dayStart = new Date(date.setHours(0, 0, 0, 0));
-      const dayEnd = new Date(date.setHours(23, 59, 59, 999));
+      date.setUTCDate(date.getUTCDate() - i);
+      const dayEnd = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59, 59, 999));
 
-      const totalUsersOnDay = await User.countDocuments({ createdAt: { $lte: dayEnd } });
-      const paidUsersOnDay = await User.countDocuments({ createdAt: { $lte: dayEnd }, is_premium: true });
-
-      userGrowthData.push({
-        date: dayStart.toISOString().split('T')[0], // Format as 'YYYY-MM-DD'
-        totalUsers: totalUsersOnDay,
-        paidUsers: paidUsersOnDay,
-      });
+      const dayPromise = (async () => {
+        const totalUsersOnDay = await User.countDocuments({ createdAt: { $lte: dayEnd } });
+        const paidUsersOnDay = await User.countDocuments({ createdAt: { $lte: dayEnd }, is_premium: true });
+        const startOfDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+        return {
+          date: startOfDay.toISOString().split('T')[0],
+          totalUsers: totalUsersOnDay,
+          paidUsers: paidUsersOnDay,
+        };
+      })();
+      userGrowthPromises.push(dayPromise);
     }
+    const userGrowthData = await Promise.all(userGrowthPromises);
 
-    // 3. Get other stats
-    const totalUsers = await User.countDocuments();
-    const paidUsers = await User.countDocuments({ is_premium: true });
-    const activeUsers = await User.countDocuments({ last_login: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } });
-    const totalChannels = await Channel.countDocuments();
-    const activeChannels = await Channel.countDocuments({ status: true });
-
-    // Assuming you add a 'views' field to your channel schema later
+    // 3. Get other general stats
+    const [totalUsers, paidUsers, activeUsers, totalChannels, activeChannels] = await Promise.all([
+        User.countDocuments(),
+        User.countDocuments({ is_premium: true }),
+        User.countDocuments({ last_login: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } }),
+        Channel.countDocuments(),
+        Channel.countDocuments({ status: true })
+    ]);
+    
     const topChannels = await Channel.find({}).sort({ views: -1 }).limit(5).select('name views');
 
+    // 4. Assemble the final response object
     const stats = {
       totalUsers,
       paidUsers,
@@ -243,7 +256,7 @@ app.get('/api/stats', async (req, res) => {
         monthly: monthlyRevenue,
       },
       userGrowth: userGrowthData,
-      topChannels: topChannels.map(c => ({ name: c.name, viewCount: c.views || 0 })) // Default views to 0 if not present
+      topChannels: topChannels.map(c => ({ name: c.name, viewCount: c.views || 0 }))
     };
 
     res.json(stats);
