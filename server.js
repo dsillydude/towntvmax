@@ -3,8 +3,8 @@
  * --------------------------------------------------------------
  * Patches applied:
  * ... (previous patches)
- * 35) APPLIED: Fixed JWT malformed error.
  * 36) PATCHED: Removed authMiddleware for a login-free admin panel.
+ * 37) PATCHED: Added view tracking for channels.
  */
 
 const express = require('express');
@@ -84,6 +84,8 @@ const channelSchema = new mongoose.Schema({
   status: { type: Boolean, default: true },
   tag: { type: String, default: '' },
   position: { type: Number, default: 999 },
+  // <<-- PATCH A: ADDED viewCount -->>
+  viewCount: { type: Number, default: 0, index: -1 },
 
 }, { timestamps: true });
 
@@ -168,24 +170,14 @@ function authMiddleware(req, res, next) {
 }
 
 // --- STATS ROUTE -----------------------------------------------------------
-// --- STATS ROUTE (IMPROVED VERSION) ----------------------------------------
-// --- STATS ROUTE (IMPROVED WITH TIMEZONE FIX) ------------------------------
 app.get('/api/stats', async (req, res) => {
   try {
-    // --- FIX APPLIED HERE: Using UTC for all date calculations ---
     const now = new Date();
-    // Get the start of today in UTC
     const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-
-    // Calculate the start of the week (last Sunday) in UTC
     const weekStartUtc = new Date(todayUtc);
     weekStartUtc.setUTCDate(weekStartUtc.getUTCDate() - weekStartUtc.getUTCDay());
-
-    // Calculate the start of the month in UTC
     const monthStartUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-    // --- END OF FIX ---
 
-    // 1. Calculate Revenue for all periods efficiently in one query
     const revenueData = await Transaction.aggregate([
       { $match: { status: 'COMPLETED' } },
       {
@@ -210,7 +202,6 @@ app.get('/api/stats', async (req, res) => {
     const weeklyRevenue = revenueData[0].weekly[0]?.total || 0;
     const monthlyRevenue = revenueData[0].monthly[0]?.total || 0;
 
-    // 2. Calculate User Growth data for the last 7 days
     const userGrowthPromises = [];
     for (let i = 6; i >= 0; i--) {
       const date = new Date();
@@ -231,7 +222,6 @@ app.get('/api/stats', async (req, res) => {
     }
     const userGrowthData = await Promise.all(userGrowthPromises);
 
-    // 3. Get other general stats
     const [totalUsers, paidUsers, activeUsers, totalChannels, activeChannels] = await Promise.all([
         User.countDocuments(),
         User.countDocuments({ is_premium: true }),
@@ -240,9 +230,9 @@ app.get('/api/stats', async (req, res) => {
         Channel.countDocuments({ status: true })
     ]);
     
-    const topChannels = await Channel.find({}).sort({ views: -1 }).limit(5).select('name views');
+    // <<-- PATCH C.1: UPDATED stats query -->>
+    const topChannels = await Channel.find({}).sort({ viewCount: -1 }).limit(5).select('name viewCount');
 
-    // 4. Assemble the final response object
     const stats = {
       totalUsers,
       paidUsers,
@@ -256,7 +246,8 @@ app.get('/api/stats', async (req, res) => {
         monthly: monthlyRevenue,
       },
       userGrowth: userGrowthData,
-      topChannels: topChannels.map(c => ({ name: c.name, viewCount: c.views || 0 }))
+      // <<-- PATCH C.2: UPDATED stats mapping -->>
+      topChannels: topChannels.map(c => ({ name: c.name, viewCount: c.viewCount || 0 }))
     };
 
     res.json(stats);
@@ -1023,6 +1014,28 @@ app.get('/api/public/channels/:channelId', enforcePaywall, async (req, res) => {
     res.json({ channel: transformDoc(channel) });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch channel' });
+  }
+});
+
+// <<-- PATCH B: ADDED new route to track views -->>
+app.post('/api/public/channels/:channelId/track-view', async (req, res) => {
+  try {
+    // We use findOneAndUpdate with $inc for an efficient, atomic increment
+    const updatedChannel = await Channel.findOneAndUpdate(
+      { channelId: req.params.channelId },
+      { $inc: { viewCount: 1 } },
+      { new: true } // This option returns the updated document
+    );
+
+    if (!updatedChannel) {
+      return res.status(404).json({ error: 'Channel not found' });
+    }
+
+    // Return a simple success message
+    res.status(200).json({ success: true, newViewCount: updatedChannel.viewCount });
+  } catch (error) {
+    console.error('Track view error:', error);
+    res.status(500).json({ error: 'Failed to track view' });
   }
 });
 
